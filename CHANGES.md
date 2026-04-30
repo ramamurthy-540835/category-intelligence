@@ -95,3 +95,26 @@ Expected:
 - Control center phase cards are not yet fully wired to real SSE step stream globally.
 - Backend action handlers may still be mocked for some action types.
 - Charts are not added yet (table-first view currently).
+
+## Validation Snapshot (2026-04-30)
+
+End-to-end verification completed successfully.
+
+### Backend checks
+
+- `GET /health` -> `{"status":"ok","project":"ctoteam"}`
+- `POST /feeds/prices?limit=20` -> `rows_written: 3`, `skus_fetched: 3`
+- `GET /feeds/prices/status` -> latest run status `success`
+
+### Data path checks
+
+- `GET /dashboard/overview?q=sony&stock=all` (backend `:8001`) -> `source: bigquery-live`, rows returned
+- `GET /api/dashboard/overview?q=sony&stock=all` (frontend `:3001`) -> `source: bigquery-live`, rows returned
+
+### Current confirmed state
+
+- SerpAPI ingest works
+- BigQuery snapshot write works
+- Frontend proxy to backend works
+- Dashboard live source is BigQuery-backed
+
