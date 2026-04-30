@@ -33,7 +33,7 @@ export default function AlertTicker({ alerts }: Props) {
 
   return (
     <div className="bg-red-700 text-white text-xs py-0.5 px-4 overflow-hidden relative h-6 flex items-center">
-      <div className="absolute whitespace-nowrap animate-ticker hover:animation-pause" style={{ animationDuration: `${alerts.length * 6}s` }}>
+      <div className="absolute whitespace-nowrap overflow-hidden animate-ticker hover:animation-pause" style={{ animationDuration: `60s` }}>
         {alerts.map((alert, index) => (
           <span key={index} className="inline-block mx-3">
             <span className="font-semibold">{alert.sku}</span> <span className="text-red-200">— {alert.msg}</span>
