@@ -37,6 +37,7 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<"gap_desc" | "gap_asc" | "name">("gap_desc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [fetchSize, setFetchSize] = useState(100);
   const [selected, setSelected] = useState<Row | null>(null);
   const [feedStatus, setFeedStatus] = useState<FeedStatus>({ status: "loading" });
   const [refreshing, setRefreshing] = useState(false);
@@ -50,7 +51,7 @@ export default function Home() {
   };
 
   const loadOverview = async () => {
-    const params = new URLSearchParams({ q: query, stock: stockFilter, limit: "500", offset: "0" });
+    const params = new URLSearchParams({ q: query, stock: stockFilter, limit: String(fetchSize), offset: "0" });
     const res = await fetch(`/api/dashboard/overview?${params.toString()}`, { cache: "no-store" });
     const data: OverviewPayload = await res.json();
     setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
@@ -76,7 +77,7 @@ export default function Home() {
     run();
     const id = setInterval(run, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
     return () => clearInterval(id);
-  }, [query, stockFilter, autoRefreshMins, autoRefreshOn]);
+  }, [query, stockFilter, autoRefreshMins, autoRefreshOn, fetchSize]);
 
   const filteredRows = useMemo(
     () =>
@@ -95,10 +96,14 @@ export default function Home() {
   const safePage = Math.min(page, totalPages);
   const pagedRows = filteredRows.slice((safePage - 1) * pageSize, safePage * pageSize);
 
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
   const triggerRefresh = async () => {
     setRefreshing(true);
-    logEvent("sensing", "Triggered feed refresh");
-    const res = await fetch(`/api/feeds/prices?limit=100`, { method: "POST" });
+    logEvent("sensing", `Triggered feed refresh limit=${fetchSize}`);
+    const res = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST" });
     const data = await res.json();
     logEvent("integration", `Feed refresh done: ${JSON.stringify(data)}`);
     await Promise.all([loadOverview(), loadFeedStatus()]);
@@ -169,6 +174,7 @@ export default function Home() {
               <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "in" | "out")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="all">All Stock</option><option value="in">In Stock</option><option value="out">Out of Stock</option></select>
               <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "gap_desc" | "gap_asc" | "name")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="gap_desc">Largest Gap</option><option value="gap_asc">Smallest Gap</option><option value="name">Name</option></select>
               <select value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">10/page</option><option value="20">20/page</option><option value="50">50/page</option></select>
+              <select value={String(fetchSize)} onChange={(e) => setFetchSize(Number(e.target.value))} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">Fetch 10</option><option value="100">Fetch 100</option><option value="500">Fetch 500</option><option value="1000">Fetch 1000</option></select>
             </div>
             <div className="max-h-64 overflow-y-auto">
               <table className="w-full text-[11px] text-left">
