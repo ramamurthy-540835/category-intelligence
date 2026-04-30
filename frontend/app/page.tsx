@@ -56,10 +56,12 @@ export default function Home() {
     const params = new URLSearchParams({ q: query, stock: stockFilter, limit: String(fetchSize), offset: "0" });
     const res = await fetch(`/api/dashboard/overview?${params.toString()}`, { cache: "no-store" });
     const data: OverviewPayload = await res.json();
-    setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
-    setRows(Array.isArray(data.rows) ? data.rows : []);
-    setSource(data.source || "unknown");
-    setTimestamp(data.timestamp || "");
+    if (Array.isArray(data.rows) && data.rows.length > 0) {
+      setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
+      setRows(data.rows);
+      setSource(data.source || "unknown");
+      setTimestamp(data.timestamp || "");
+    }
   };
 
   const loadFeedStatus = async () => {
@@ -150,6 +152,17 @@ export default function Home() {
               <button onClick={triggerRefresh} disabled={refreshing} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Refreshing..." : "Refresh Now"}</button>
             </div>
             <div className="mb-2 flex items-center gap-2">
+              <label className="text-slate-300">Fetch Limit</label>
+              <input
+                type="number"
+                min={1}
+                max={5000}
+                value={fetchSize}
+                onChange={(e) => setFetchSize(Math.max(1, Number(e.target.value) || 1))}
+                className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
+              />
+            </div>
+            <div className="mb-2 flex items-center gap-2">
               <label className="text-slate-300">Auto Refresh</label>
               <input type="checkbox" checked={autoRefreshOn} onChange={(e) => setAutoRefreshOn(e.target.checked)} />
               <select value={String(autoRefreshMins)} onChange={(e) => setAutoRefreshMins(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5">
@@ -178,7 +191,6 @@ export default function Home() {
               <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "in" | "out")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="all">All Stock</option><option value="in">In Stock</option><option value="out">Out of Stock</option></select>
               <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "gap_desc" | "gap_asc" | "name")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="gap_desc">Largest Gap</option><option value="gap_asc">Smallest Gap</option><option value="name">Name</option></select>
               <select value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">10/page</option><option value="20">20/page</option><option value="50">50/page</option></select>
-              <select value={String(fetchSize)} onChange={(e) => setFetchSize(Number(e.target.value))} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">Fetch 10</option><option value="100">Fetch 100</option><option value="500">Fetch 500</option><option value="1000">Fetch 1000</option></select>
             </div>
             <div className="max-h-64 overflow-y-auto">
               <table className="w-full text-[11px] text-left">
