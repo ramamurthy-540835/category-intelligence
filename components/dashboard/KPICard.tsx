@@ -21,18 +21,18 @@ export default function KPICard({ label, value, metric, delta, trend, status, up
   };
 
   return (
-    <div className={`p-3 border rounded shadow-sm ${borderClass}`}>
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className="text-xl font-bold my-0.5">{value}</div>
-      <div className="text-2xs text-gray-500">{metric}</div>
+    <div className={`p-2 border rounded shadow-sm ${borderClass}`}>
+      <div className="text-2xs text-gray-400">{label}</div>
+      <div className="text-lg font-bold my-0.25">{value}</div>
+      <div className="text-3xs text-gray-500">{metric}</div>
       
       {(delta || trend) && (
-        <div className="mt-1.5 text-xs flex items-center gap-1">
+        <div className="mt-1 text-2xs flex items-center gap-0.5">
           {renderTrend()} {delta}
         </div>
       )}
       
-      {updatedAt && <div className="mt-1.5 text-2xs text-gray-400 text-right">Updated: {updatedAt}</div>}
+      {updatedAt && <div className="mt-1 text-3xs text-gray-400 text-right">Updated: {updatedAt}</div>}
     </div>
   );
 }

@@ -54,46 +54,46 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
   };
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-2 flex flex-col h-full text-white text-xs">
-      <div className="flex justify-between items-center mb-2">
+    <div className="bg-gray-900 border border-gray-700 rounded-xl p-1.5 flex flex-col h-full text-white text-xs">
+      <div className="flex justify-between items-center mb-1.5">
         <h3 className="font-semibold text-xs">Agent Control Center</h3>
         <span className={`px-1.5 py-0.5 text-2xs rounded ${getBadgeClasses()}`}>{getBadgeText()}</span>
       </div>
       
-      <div className="flex gap-1 mb-2 flex-wrap">
+      <div className="flex gap-1 mb-1.5 flex-wrap">
         {PHASES.map(phase => (
-          <div key={phase} className={`px-1.5 py-0.5 text-2xs rounded ${getPhaseCardClasses(phase)}`}>
+          <div key={phase} className={`px-1 py-0.5 text-3xs rounded ${getPhaseCardClasses(phase)}`}>
             {phase}
           </div>
         ))}
       </div>
 
       {latestStepContent && (
-        <div className="text-gray-400 italic mb-2 overflow-hidden text-ellipsis whitespace-nowrap">
+        <div className="text-gray-400 italic mb-1.5 overflow-hidden text-ellipsis whitespace-nowrap">
           {latestStepContent}
         </div>
       )}
-      {error && <div className="mt-1 text-red-300 bg-red-900 p-1.5 rounded mb-2 overflow-wrap break-words">{error}</div>}
+      {error && <div className="mt-1 text-red-300 bg-red-900 p-1 rounded mb-1.5 overflow-wrap break-words">{error}</div>}
 
       {/* Live Alerts Section */}
-      <div className="mt-auto pt-2 border-t border-gray-700">
-        <h4 className="font-semibold mb-1.5 text-gray-200">Live Alerts</h4>
+      <div className="mt-auto pt-1.5 border-t border-gray-700">
+        <h4 className="font-semibold mb-1 text-gray-200">Live Alerts</h4>
         {alerts.length === 0 ? (
-          <div className="text-gray-500 text-xs">No active alerts.</div>
+          <div className="text-gray-500 text-2xs">No active alerts.</div>
         ) : (
-          <div className="space-y-1 max-h-20 overflow-y-auto pr-1 custom-scrollbar"> {/* Adjusted max-h and added custom-scrollbar */}
+          <div className="space-y-0.5">
             {alerts.slice(0, 4).map((alert, index) => ( // Show max 4 alerts
-              <div key={index} className="flex items-start gap-1 bg-gray-800 rounded p-1">
-                <span className={`px-1 py-0.5 rounded text-white font-semibold text-2xs ${alert.priority === 'P1' ? 'bg-red-600' : 'bg-yellow-600'}`}>
+              <div key={index} className="flex items-start gap-0.5 bg-gray-800 rounded p-0.5">
+                <span className={`px-0.5 py-0.25 rounded text-white font-semibold text-3xs ${alert.priority === 'P1' ? 'bg-red-600' : 'bg-yellow-600'}`}>
                   {alert.priority}
                 </span>
-                <div className="flex-1 text-gray-300 overflow-hidden text-2xs">
+                <div className="flex-1 text-gray-300 overflow-hidden text-3xs">
                   <span className="font-semibold">{alert.sku}</span>: <span className="text-gray-400 overflow-wrap break-words">{alert.msg}</span>
                 </div>
               </div>
             ))}
             {alerts.length > 4 && (
-              <div className="text-gray-500 text-2xs mt-1 text-center">
+              <div className="text-gray-500 text-3xs mt-0.5 text-center">
                 +{alerts.length - 4} more alerts
               </div>
             )}
