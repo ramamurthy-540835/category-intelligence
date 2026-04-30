@@ -54,15 +54,15 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
   };
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-1.5 flex flex-col h-full text-white text-xs">
+    <div className="bg-gray-900 border border-gray-700 rounded-xl p-2.5 flex flex-col h-full text-white text-[12px]">
       <div className="flex justify-between items-center mb-1.5">
-        <h3 className="font-semibold text-xs">Agent Control Center</h3>
+        <h3 className="font-semibold text-[12px]">Agent Control Center</h3>
         <span className={`px-1.5 py-0.5 text-2xs rounded ${getBadgeClasses()}`}>{getBadgeText()}</span>
       </div>
       
       <div className="flex gap-1 mb-1.5 flex-wrap">
         {PHASES.map(phase => (
-          <div key={phase} className={`px-1 py-0.5 text-3xs rounded ${getPhaseCardClasses(phase)}`}>
+          <div key={phase} className={`px-1.5 py-0.5 text-[11px] rounded ${getPhaseCardClasses(phase)}`}>
             {phase}
           </div>
         ))}
@@ -82,12 +82,12 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
           <div className="text-gray-500 text-2xs">No active alerts.</div>
         ) : (
           <div className="space-y-0.5">
-            {alerts.slice(0, 4).map((alert, index) => ( // Show max 4 alerts
-              <div key={index} className="flex items-start gap-0.5 bg-gray-800 rounded p-0.5">
-                <span className={`px-0.5 py-0.25 rounded text-white font-semibold text-3xs ${alert.priority === 'P1' ? 'bg-red-600' : 'bg-yellow-600'}`}>
+            {alerts.slice(0, 4).map((alert, index) => (
+              <div key={index} className="flex items-start gap-1 bg-gray-800 rounded p-1">
+                <span className={`px-1 py-0.5 rounded text-white font-semibold text-[10px] ${alert.priority === 'P1' ? 'bg-red-600' : 'bg-yellow-600'}`}>
                   {alert.priority}
                 </span>
-                <div className="flex-1 text-gray-300 overflow-hidden text-3xs">
+                <div className="flex-1 text-gray-300 overflow-hidden text-[11px] leading-4">
                   <span className="font-semibold">{alert.sku}</span>: <span className="text-gray-400 overflow-wrap break-words">{alert.msg}</span>
                 </div>
               </div>

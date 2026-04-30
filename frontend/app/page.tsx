@@ -6,18 +6,29 @@ import AgentControlCenter from "@/components/chat/AgentControlCenter";
 import AlertTicker from "@/components/AlertTicker";
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
+type OverviewPayload = {
+  source?: string;
+  timestamp?: string;
+  alerts?: Alert[];
+};
 
 export default function Home() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [source, setSource] = useState<string>("loading");
+  const [timestamp, setTimestamp] = useState<string>("");
 
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch("/api/dashboard/overview", { cache: "no-store" });
-        const data = await res.json();
+        const data: OverviewPayload = await res.json();
         setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
+        setSource(data.source || "unknown");
+        setTimestamp(data.timestamp || "");
       } catch {
         setAlerts([]);
+        setSource("error");
+        setTimestamp("");
       }
     };
 
@@ -33,6 +44,15 @@ export default function Home() {
         <span className="font-semibold text-white">Category Intelligence</span>
         <span className="text-xs text-blue-300 ml-1">POWERED BY ADEPT AI</span>
       </header>
+      <div className="bg-slate-900 border-b border-slate-700 px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
+        <span>
+          Data Source:{" "}
+          <span className={source === "live-serpapi" ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>
+            {source}
+          </span>
+        </span>
+        <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
+      </div>
       <AlertTicker alerts={alerts} />
       <div className="flex flex-1 p-4 gap-4">
         <div className="w-[35%] flex flex-col h-full overflow-y-auto">
