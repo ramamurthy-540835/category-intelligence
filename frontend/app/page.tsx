@@ -22,6 +22,8 @@ type OverviewPayload = { source?: string; timestamp?: string; alerts?: Alert[]; 
 
 type FeedStatus = {
   status: string;
+  active_skus?: number;
+  latest_snapshot_rows?: number;
   latest_run?: { run_id: string; timestamp: string; skus_fetched: number; rows_written: number; status: string };
 };
 
@@ -157,7 +159,9 @@ export default function Home() {
               </select>
             </div>
             <div className="mb-2 text-slate-300">Run: {feedStatus.latest_run?.run_id || "--"}</div>
+            <div className="mb-2 text-slate-300">Requested: {fetchSize} · Source Active SKUs: {feedStatus.active_skus ?? "--"}</div>
             <div className="mb-2 text-slate-300">Rows: {feedStatus.latest_run?.rows_written ?? 0} / SKUs: {feedStatus.latest_run?.skus_fetched ?? 0}</div>
+            <div className="mb-2 text-slate-300">Latest Snapshot Rows: {feedStatus.latest_snapshot_rows ?? "--"}</div>
             <div className="max-h-52 overflow-y-auto space-y-1">
               {events.length === 0 ? <div className="text-slate-500">No agent events yet.</div> : events.map((e, i) => <div key={i} className="bg-slate-800 rounded p-1"><span className="text-emerald-300">{e.ts}</span> [{e.phase}] {e.message}</div>)}
             </div>

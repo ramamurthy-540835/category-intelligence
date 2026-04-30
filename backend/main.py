@@ -66,6 +66,7 @@ async def run_competitor_price_feed(limit: int = 500):
     try:
         feed = CompetitorPriceFeed()
         result = await feed.run(limit=limit)
+        result["requested_limit"] = limit
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
     except ValueError as e:
         logger.error(f"Configuration error for price feed: {e}")
@@ -86,9 +87,31 @@ async def get_competitor_price_feed_status():
             LIMIT 1
         """
         rows = await bq_client.query(sql, {})
+        source_sql = f"SELECT COUNT(*) AS active_skus FROM `{project}.{dataset}.sku_master` WHERE COALESCE(active_flag, TRUE)=TRUE"
+        snapshot_sql = f"""
+            SELECT COUNT(*) AS latest_snapshot_rows
+            FROM `{project}.{dataset}.competitor_price_snapshots`
+            WHERE snapshot_time = (
+              SELECT MAX(snapshot_time)
+              FROM `{project}.{dataset}.competitor_price_snapshots`
+            )
+        """
+        source_rows = await bq_client.query(source_sql, {})
+        snap_rows = await bq_client.query(snapshot_sql, {})
         if not rows:
-            return {"status": "no_runs"}
-        return {"status": "ok", "latest_run": rows[0]}
+            return {
+                "status": "no_runs",
+                "requested_limit": None,
+                "active_skus": source_rows[0].get("active_skus", 0) if source_rows else 0,
+                "latest_snapshot_rows": snap_rows[0].get("latest_snapshot_rows", 0) if snap_rows else 0,
+            }
+        return {
+            "status": "ok",
+            "latest_run": rows[0],
+            "requested_limit": None,
+            "active_skus": source_rows[0].get("active_skus", 0) if source_rows else 0,
+            "latest_snapshot_rows": snap_rows[0].get("latest_snapshot_rows", 0) if snap_rows else 0,
+        }
     except Exception as e:
         logger.error(f"Failed to retrieve feed status: {e}")
         return {"status": "error", "detail": str(e)}
