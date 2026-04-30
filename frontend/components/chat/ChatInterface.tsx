@@ -43,6 +43,25 @@ export function ChatInterface() {
 
   return (
     <div className="flex flex-col flex-1 p-4 gap-3 w-full">
+      <div className="bg-slate-900 border border-slate-700 rounded-lg p-2">
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-[12px] font-semibold text-white">Agent Ops Flow</h4>
+          <span className="text-[11px] text-slate-300">{status.toUpperCase()}</span>
+        </div>
+        <div className="grid grid-cols-4 gap-1 text-[11px]">
+          {["think", "act", "analyze", "respond"].map((phase) => {
+            const active = status.startsWith(phase) || (phase === "think" && status === "thinking") || (phase === "act" && status === "acting") || (phase === "analyze" && status === "analyzing") || (phase === "respond" && status === "responding");
+            return (
+              <div key={phase} className={`rounded px-2 py-1 text-center border ${active ? "bg-blue-900 border-blue-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}>
+                {phase}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2 max-h-16 overflow-y-auto text-[11px] text-slate-300">
+          {steps.length === 0 ? "No active agent events." : steps.slice(-6).map((s, i) => <div key={i}>[{s.step}] {s.content}</div>)}
+        </div>
+      </div>
       {/* Demo Flows */}
       <div className="flex flex-wrap gap-1.5 mb-1.5">
         {DEMO_FLOWS.map((flow, index) => (

@@ -38,19 +38,22 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
     const currentPhaseIndex = PHASES.findIndex(p => p.toLowerCase() === latestStepType);
     const thisPhaseIndex = PHASES.indexOf(phase);
 
-    if (status === 'done' || status === 'error') {
+    if (status === 'done') {
       // If done or error, all phases up to the last executed step are "completed"
       if (thisPhaseIndex <= currentPhaseIndex || (status === 'done' && thisPhaseIndex < PHASES.length)) {
-        return 'bg-gray-800 border border-green-600 text-gray-200';
+        return 'bg-emerald-900/30 border border-emerald-500 text-emerald-200';
       }
+    }
+    if (status === 'error' && latestStepType === phaseLower) {
+      return 'bg-red-900/40 border border-red-500 text-red-200';
     }
 
     if (latestStepType === phaseLower) {
-      return 'bg-blue-900 border border-blue-500 text-white'; // Active
+      return 'bg-blue-900 border border-blue-400 text-white shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'; // Active
     } else if (thisPhaseIndex < currentPhaseIndex) {
-      return 'bg-gray-800 border border-green-600 text-gray-200'; // Completed
+      return 'bg-emerald-900/20 border border-emerald-600 text-emerald-200'; // Completed
     }
-    return 'bg-gray-800 border border-gray-600 text-gray-500'; // Idle
+    return 'bg-gray-800 border border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-300 transition-colors'; // Idle
   };
 
   return (
@@ -62,7 +65,7 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
       
       <div className="flex gap-1 mb-1.5 flex-wrap">
         {PHASES.map(phase => (
-          <div key={phase} className={`px-1.5 py-0.5 text-[11px] rounded ${getPhaseCardClasses(phase)}`}>
+          <div key={phase} title={`${phase} phase`} className={`px-1.5 py-0.5 text-[11px] rounded cursor-help ${getPhaseCardClasses(phase)}`}>
             {phase}
           </div>
         ))}

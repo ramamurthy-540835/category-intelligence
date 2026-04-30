@@ -20,15 +20,24 @@ export async function GET(req: NextRequest, { params }: { params: { tab: string 
   }
 
   try {
-    const response = await fetch(`${getBackendUrl()}/dashboard/${tab}`, { cache: 'no-store' });
+    const backendUrl = getBackendUrl();
+    const qs = req.nextUrl.searchParams.toString();
+    const response = await fetch(`${backendUrl}/dashboard/${tab}${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
     if (!response.ok) {
       const detail = await response.text();
-      return NextResponse.json({ error: 'Backend fetch failed', detail }, { status: 502 });
+      return NextResponse.json({ error: 'Backend fetch failed', backend_url: backendUrl, detail }, { status: 502 });
     }
 
     const data = await response.json();
     return NextResponse.json(data);
-  } catch {
-    return NextResponse.json({ tab, source: 'fallback', alerts: [], data: [] }, { status: 200 });
+  } catch (error) {
+    return NextResponse.json({
+      tab,
+      source: 'fallback',
+      alerts: [],
+      data: [],
+      error: String(error),
+      backend_url: getBackendUrl(),
+    }, { status: 200 });
   }
 }
