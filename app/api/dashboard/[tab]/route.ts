@@ -12,7 +12,7 @@ export async function GET(req: NextRequest, { params }: { params: { tab: string 
   }
 
   try {
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000';
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8001';
     const response = await fetch(`${backendUrl}/dashboard/${tab}`);
     
     if (!response.ok) {

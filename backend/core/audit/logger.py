@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 from typing import Dict, Any
-from backend.data.bigquery_client import BigQueryClient
+from data.bigquery_client import BigQueryClient
 
 logger = logging.getLogger(__name__)
 

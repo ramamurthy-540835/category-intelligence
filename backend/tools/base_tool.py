@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-from backend.data.bigquery_client import BigQueryClient
+from data.bigquery_client import BigQueryClient
 
 class BaseTool(ABC):
     name: str

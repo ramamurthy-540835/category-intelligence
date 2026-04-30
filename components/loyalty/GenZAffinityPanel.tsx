@@ -18,37 +18,37 @@ export default function GenZAffinityPanel({
   recommendation
 }: Props) {
   return (
-    <div className="p-4 border rounded bg-white">
-      <h3 className="font-bold mb-2">Gen Z Affinity {skuId ? `- ${skuId}` : ''}</h3>
+    <div className="p-3 border rounded bg-white text-sm">
+      <h3 className="font-semibold text-lg mb-2">Gen Z Affinity {skuId ? `- ${skuId}` : ''}</h3>
       
-      <div className="text-3xl font-bold text-indigo-600 mb-4">
+      <div className="text-2xl font-bold text-indigo-600 mb-3">
         {affinityScore !== undefined ? affinityScore : '--'}
       </div>
 
       {scoreDrivers && scoreDrivers.length > 0 && (
-        <div className="mb-4">
-          <h4 className="text-sm font-semibold text-gray-600">Score Drivers</h4>
-          <ul className="list-disc pl-5 text-sm">
+        <div className="mb-3">
+          <h4 className="text-xs font-semibold text-gray-500">Score Drivers</h4>
+          <ul className="list-disc pl-4 text-xs space-y-0.5">
             {scoreDrivers.map((driver, i) => <li key={i}>{driver}</li>)}
           </ul>
         </div>
       )}
 
       {trendingTerms && trendingTerms.length > 0 && (
-        <div className="mb-4">
-          <h4 className="text-sm font-semibold text-gray-600">Trending Terms</h4>
-          <div className="flex flex-wrap gap-2 mt-1">
+        <div className="mb-3">
+          <h4 className="text-xs font-semibold text-gray-500">Trending Terms</h4>
+          <div className="flex flex-wrap gap-1.5 mt-1">
             {trendingTerms.map((term, i) => (
-              <span key={i} className="px-2 py-1 bg-gray-100 rounded text-xs">{term}</span>
+              <span key={i} className="px-1.5 py-0.5 bg-gray-100 rounded text-xs">{term}</span>
             ))}
           </div>
         </div>
       )}
 
       {discoveryChannelMix && Object.keys(discoveryChannelMix).length > 0 && (
-        <div className="mb-4">
-          <h4 className="text-sm font-semibold text-gray-600">Channel Mix</h4>
-          <div className="text-sm mt-1">
+        <div className="mb-3">
+          <h4 className="text-xs font-semibold text-gray-500">Channel Mix</h4>
+          <div className="text-xs mt-0.5 space-y-0.5">
             {Object.entries(discoveryChannelMix).map(([channel, pct]) => (
               <div key={channel} className="flex justify-between">
                 <span>{channel}</span>
@@ -60,7 +60,7 @@ export default function GenZAffinityPanel({
       )}
 
       {recommendation && (
-        <div className="mt-4 p-3 bg-indigo-50 text-indigo-900 text-sm rounded">
+        <div className="mt-3 p-2 bg-indigo-50 text-indigo-900 text-xs rounded">
           <strong>Recommendation:</strong> {recommendation}
         </div>
       )}

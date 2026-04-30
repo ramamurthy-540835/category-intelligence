@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Any
-from backend.data.pubsub_client import PubSubClient
-from backend.data.bigquery_client import BigQueryClient
+from data.pubsub_client import PubSubClient
+from data.bigquery_client import BigQueryClient
 
 class SensingAgent:
     def __init__(self):

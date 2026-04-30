@@ -1,9 +1,9 @@
 import json
 from typing import AsyncIterator, Dict, Any
-from backend.agents.intelligence_agent import IntelligenceAgent
-from backend.agents.sensing_agent import SensingAgent
-from backend.core.audit.logger import AuditLogger
-from backend.core.auth.rbac import has_permission
+from agents.intelligence_agent import IntelligenceAgent
+from agents.sensing_agent import SensingAgent
+from core.audit.logger import AuditLogger
+from core.auth.rbac import has_permission
 
 class IntegrationAgent:
     def __init__(self):

@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from backend.tools.base_tool import BaseTool
+from tools.base_tool import BaseTool
 
 class DemandIntentTool(BaseTool):
     name = "demand_intent"
