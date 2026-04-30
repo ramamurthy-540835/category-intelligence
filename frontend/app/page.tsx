@@ -42,6 +42,8 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [autoRefreshMins, setAutoRefreshMins] = useState(1);
+  const [autoRefreshOn, setAutoRefreshOn] = useState(true);
 
   const logEvent = (phase: string, message: string) => {
     setEvents((prev) => [{ ts: new Date().toLocaleTimeString(), phase, message }, ...prev].slice(0, 20));
@@ -72,9 +74,9 @@ export default function Home() {
       }
     };
     run();
-    const id = setInterval(run, 60000);
+    const id = setInterval(run, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
     return () => clearInterval(id);
-  }, [query, stockFilter]);
+  }, [query, stockFilter, autoRefreshMins, autoRefreshOn]);
 
   const filteredRows = useMemo(
     () =>
@@ -124,7 +126,12 @@ export default function Home() {
       </header>
       <div className="bg-slate-900 border-b border-slate-700 px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
         <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>{source}</span></span>
-        <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
+        <span className="flex items-center gap-3">
+          <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
+          <span className={`px-2 py-0.5 rounded ${feedStatus.latest_run?.status === "success" ? "bg-emerald-900 text-emerald-300" : "bg-amber-900 text-amber-300"}`}>
+            {feedStatus.latest_run?.status || "unknown"}
+          </span>
+        </span>
       </div>
       <AlertTicker alerts={alerts} />
       <div className="flex flex-1 p-4 gap-4">
@@ -134,6 +141,15 @@ export default function Home() {
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold">Agent Timeline</h4>
               <button onClick={triggerRefresh} disabled={refreshing} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Refreshing..." : "Refresh Now"}</button>
+            </div>
+            <div className="mb-2 flex items-center gap-2">
+              <label className="text-slate-300">Auto Refresh</label>
+              <input type="checkbox" checked={autoRefreshOn} onChange={(e) => setAutoRefreshOn(e.target.checked)} />
+              <select value={String(autoRefreshMins)} onChange={(e) => setAutoRefreshMins(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5">
+                <option value="1">1m</option>
+                <option value="5">5m</option>
+                <option value="15">15m</option>
+              </select>
             </div>
             <div className="mb-2 text-slate-300">Run: {feedStatus.latest_run?.run_id || "--"}</div>
             <div className="mb-2 text-slate-300">Rows: {feedStatus.latest_run?.rows_written ?? 0} / SKUs: {feedStatus.latest_run?.skus_fetched ?? 0}</div>
