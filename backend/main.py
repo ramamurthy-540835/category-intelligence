@@ -101,4 +101,43 @@ async def dashboard(tab: str):
     allowed_tabs = {"overview", "inventory", "dc-stock", "promos", "competitive", "vendor"}
     if tab not in allowed_tabs:
         raise HTTPException(status_code=404, detail="Tab not found")
-    return {"tab": tab, "data": []}
+    if tab != "overview":
+        return {"tab": tab, "data": []}
+
+    # Real-time overview from SerpAPI feed when configured.
+    try:
+        feed = CompetitorPriceFeed()
+        snapshot = await feed.fetch_live_snapshot()
+        rows = snapshot.get("rows", [])
+
+        alerts = []
+        for row in rows:
+            gap = row.get("price_gap_pct")
+            if gap is None:
+                continue
+            if abs(gap) < 3:
+                continue
+            direction = "above" if gap > 0 else "below"
+            priority = "P1" if abs(gap) >= 8 else "P2"
+            alerts.append({
+                "priority": priority,
+                "sku": row.get("name", row.get("sku_id", "Unknown SKU")),
+                "msg": f"Price {abs(gap):.1f}% {direction} market"
+            })
+
+        return {
+            "tab": "overview",
+            "source": "live-serpapi",
+            "timestamp": snapshot.get("timestamp"),
+            "alerts": alerts,
+            "rows": rows,
+        }
+    except Exception as e:
+        logger.error(f"Overview live fetch failed: {e}")
+        return {
+            "tab": "overview",
+            "source": "fallback",
+            "alerts": [],
+            "rows": [],
+            "error": "Live feed unavailable. Check SERPAPI_KEY and network access."
+        }

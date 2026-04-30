@@ -4,24 +4,31 @@ export const runtime = 'nodejs';
 
 const ALLOWED_TABS = new Set(['overview', 'inventory', 'dc-stock', 'promos', 'competitive', 'vendor']);
 
+function getBackendUrl() {
+  return (
+    process.env.BACKEND_URL ||
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'http://localhost:8001'
+  );
+}
+
 export async function GET(req: NextRequest, { params }: { params: { tab: string } }) {
   const tab = params.tab;
-  
+
   if (!ALLOWED_TABS.has(tab)) {
     return NextResponse.json({ error: 'Tab not found' }, { status: 404 });
   }
 
   try {
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8001';
-    const response = await fetch(`${backendUrl}/dashboard/${tab}`);
-    
+    const response = await fetch(`${getBackendUrl()}/dashboard/${tab}`, { cache: 'no-store' });
     if (!response.ok) {
-      throw new Error('Backend fetch failed');
+      const detail = await response.text();
+      return NextResponse.json({ error: 'Backend fetch failed', detail }, { status: 502 });
     }
-    
+
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error) {
-    return NextResponse.json({ source: 'fallback', tab, data: [] });
+  } catch {
+    return NextResponse.json({ tab, source: 'fallback', alerts: [], data: [] }, { status: 200 });
   }
 }
