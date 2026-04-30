@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "dev:stack": "bash scripts/start.sh",
-    "push:github": "bash scripts/push_to_github.sh"
+    "dev:stack": "bash ../scripts/start.sh",
+    "push:github": "bash ../scripts/push_to_github.sh"
   },
   "dependencies": {
     "next": "14.2.13",

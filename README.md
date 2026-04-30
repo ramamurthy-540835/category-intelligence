@@ -1,36 +1,53 @@
 # Category Intelligence
 
-Category Intelligence is a full-stack app with a Next.js frontend and a FastAPI backend for retail category analysis.
+Category Intelligence is a full-stack app with a FastAPI backend and a Next.js frontend.
 
 ## Project Structure
 
-- `app/`: Next.js App Router pages and API routes.
-- `components/`: Reusable frontend UI components.
-- `lib/`: Frontend utilities, API client helpers, and metrics helpers.
+- `frontend/`: Next.js application.
+- `frontend/app/`: App Router pages and API routes.
+- `frontend/components/`: Reusable frontend UI components.
+- `frontend/lib/`: Frontend utilities and API helpers.
+- `backend/`: FastAPI backend service.
 - `backend/agents/`: Agent orchestration logic.
 - `backend/tools/`: Analytics and intelligence tool modules.
-- `backend/core/`: Shared backend services (auth, audit, metrics, PII).
-- `backend/data/`: Data access clients and external feed integrations.
+- `backend/core/`: Shared backend services.
+- `backend/data/`: Data clients and external feeds.
 - `backend/schemas/`: API schema definitions.
-- `backend/tests/`: Backend test suite.
-- `scripts/`: Developer automation scripts.
+- `backend/tests/`: Backend tests.
+- `scripts/`: Project scripts.
 
 ## Local Development
 
-1. Install frontend dependencies:
+1. Frontend install:
 
 ```bash
+cd frontend
 npm install
 ```
 
-2. Start backend + frontend together:
+2. Run full stack from repo root:
 
 ```bash
-npm run dev:stack
+bash scripts/start.sh
 ```
 
-## Useful Scripts
+## Useful Commands
 
-- `npm run dev` - Start frontend only (port from Next defaults or flags).
-- `npm run dev:stack` - Start backend on `:8001` and frontend on `:3001`.
-- `npm run push:github` - Commit and push using `GITHUB_TOKEN` from `.env.local`.
+- Frontend only:
+
+```bash
+cd frontend && npm run dev
+```
+
+- Full stack:
+
+```bash
+cd frontend && npm run dev:stack
+```
+
+- Push helper:
+
+```bash
+cd frontend && npm run push:github
+```

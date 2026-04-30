@@ -1,4 +1,6 @@
 #!/bin/bash
+set -e
+
 echo "Starting Category Intelligence Agent..."
 
 # Backend on 8001
@@ -13,7 +15,7 @@ sleep 4
 curl -s http://localhost:8001/health && echo " Backend ready" || echo " Backend not ready"
 
 # Frontend on 3001
-cd ..
+cd ../frontend
 npm install -q
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8001 npm run dev -- --port 3001 &
 FRONTEND_PID=$!
