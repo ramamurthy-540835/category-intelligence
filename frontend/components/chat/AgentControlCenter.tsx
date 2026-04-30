@@ -81,8 +81,8 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
         {alerts.length === 0 ? (
           <div className="text-gray-500 text-2xs">No active alerts.</div>
         ) : (
-          <div className="space-y-0.5">
-            {alerts.slice(0, 4).map((alert, index) => (
+          <div className="space-y-0.5 max-h-56 overflow-y-auto pr-1">
+            {alerts.map((alert, index) => (
               <div key={index} className="flex items-start gap-1 bg-gray-800 rounded p-1">
                 <span className={`px-1 py-0.5 rounded text-white font-semibold text-[10px] ${alert.priority === 'P1' ? 'bg-red-600' : 'bg-yellow-600'}`}>
                   {alert.priority}
@@ -92,11 +92,6 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
                 </div>
               </div>
             ))}
-            {alerts.length > 4 && (
-              <div className="text-gray-500 text-3xs mt-0.5 text-center">
-                +{alerts.length - 4} more alerts
-              </div>
-            )}
           </div>
         )}
       </div>
