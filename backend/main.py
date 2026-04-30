@@ -1,12 +1,20 @@
 import os
 import logging
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.responses import StreamingResponse, JSONResponse
+from dotenv import load_dotenv
 from agents.integration_agent import IntegrationAgent
 from schemas.api import ChatRequest, ActionRequest
 from core.auth.rbac import require_permission
 from data.external_feeds import CompetitorPriceFeed
 from data.bigquery_client import BigQueryClient
+
+# Load environment variables from repo-level .env.local (preferred) and backend-local fallback.
+BACKEND_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BACKEND_DIR.parent
+load_dotenv(REPO_ROOT / ".env.local", override=False)
+load_dotenv(BACKEND_DIR / ".env.local", override=False)
 
 app = FastAPI(title="Category Intelligence Agent")
 logger = logging.getLogger(__name__)
