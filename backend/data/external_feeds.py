@@ -62,6 +62,7 @@ class CompetitorPriceFeed:
 
     def _log_event(self, stage: str, status: str, message: str, details: Dict[str, Any] = None):
         """Logs a structured event for the current run."""
+        details = details or {}
         if not self.current_run_id:
             self.current_run_id = str(uuid.uuid4()) # Start a new run if none exists
             self.run_start_time = datetime.datetime.now().isoformat()
@@ -78,9 +79,9 @@ class CompetitorPriceFeed:
             "written_rows": details.get("written_rows") if stage == EventStage.UPDATING else None,
             "snapshot_rows": details.get("snapshot_rows") if stage == EventStage.RESPONDING else None,
             "external_source_status": details.get("external_source_status") if stage in [EventStage.ENRICHING, EventStage.FETCHING] else None,
-            "error_type": details.get("error_type") if status == "ERROR" else None,
-            "fix": details.get("fix") if status == "ERROR" else None,
-            ** (details or {})
+            "error_type": details.get("error_type") if status in ("ERROR", "FAILED") else None,
+            "fix": details.get("fix") if status in ("ERROR", "FAILED") else None,
+            **details
         }
         self.run_events.append(event)
         log.info(f"FEED_EVENT: {event}")
@@ -349,4 +350,3 @@ class CompetitorPriceFeed:
             log.error(f"Feed run failed unexpectedly: {e}")
             self._log_event(EventStage.ERROR, "FAILED", f"Feed run failed unexpectedly: {e}", {"error_type": "UNEXPECTED_ERROR"})
             return {"status": "error", "message": str(e), "error_type": "UNEXPECTED_ERROR", "run_id": self.current_run_id, "timestamp": self.run_start_time}
-
