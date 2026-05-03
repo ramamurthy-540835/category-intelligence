@@ -125,7 +125,7 @@ async def get_competitor_price_feed_status():
     try:
         check_gcp_auth()
         project = os.environ.get("GCP_PROJECT_ID", "ctoteam")
-        dataset = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
+        dataset = os.environ.get("BIGQUERY_DATASET", "category_intelligence") # Corrected dataset name
         
         # Check if bq_client_instance is valid before proceeding
         if bq_client_instance is None or bq_client_instance._client is None:

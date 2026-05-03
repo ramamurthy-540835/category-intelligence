@@ -6,7 +6,7 @@ from google.auth import default, exceptions as google_auth_exceptions
 class BigQueryClient:
     def __init__(self):
         self.project_id = os.environ.get("GCP_PROJECT_ID")
-        self.dataset = os.environ.get("BIGQUERY_DATASET", "default")
+        self.dataset = os.environ.get("BIGQUERY_DATASET", "category_intelligence") # Corrected dataset name
         self._client = None
         self._check_auth()
 
