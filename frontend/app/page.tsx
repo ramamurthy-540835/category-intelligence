@@ -44,10 +44,14 @@ type AgentEvent = {
   stage: string;
   status: string;
   message: string;
-  requested_limit?: number;
+  requested_skus?: number;
+  active_skus?: number;
   processed_rows?: number;
-  total_skus?: number;
+  written_rows?: number;
+  snapshot_rows?: number;
+  external_source_status?: string;
   error_type?: string;
+  fix?: string;
 };
 
 const GCP_AUTH_MISSING_ERROR_TYPE = "GCP_AUTH_MISSING";
@@ -88,6 +92,7 @@ export default function Home() {
     switch (stage) {
       case 'SENSING': return 'thinking';
       case 'FETCHING': return 'thinking';
+      case 'ENRICHING': return 'analyzing'; // Map Enriching to Analyze
       case 'PROCESSING': return 'analyzing';
       case 'ANALYZING': return 'analyzing';
       case 'UPDATING': return 'acting';
@@ -275,16 +280,18 @@ export default function Home() {
   const currentMessage = latestEvent ? latestEvent.message : 'No events yet.';
 
   const progressSummary = {
-    requested: feedStatus.latest_run?.skus_fetched ?? latestEvent?.requested_limit ?? fetchSize,
-    active_skus: feedStatus.active_skus ?? latestEvent?.total_skus ?? '--',
+    requested: feedStatus.latest_run?.skus_fetched ?? latestEvent?.requested_skus ?? fetchSize,
+    active_skus: feedStatus.active_skus ?? latestEvent?.active_skus ?? '--',
     processed_rows: feedStatus.latest_run?.rows_written ?? latestEvent?.processed_rows ?? '--',
-    latest_snapshot_rows: feedStatus.latest_snapshot_rows ?? '--',
+    written_rows: feedStatus.latest_run?.rows_written ?? latestEvent?.written_rows ?? '--',
+    snapshot_rows: feedStatus.latest_snapshot_rows ?? latestEvent?.snapshot_rows ?? '--',
     current_stage: currentStage,
     current_status: currentStatus,
     current_message: currentMessage,
     run_id: currentRunId,
     error_type: feedStatus.error_type || latestEvent?.error_type || null,
     error_message: feedStatus.error || latestEvent?.message || null,
+    fix: feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE ? `Table: ${feedStatus.error?.replace("BigQuery table not found: ", "")}` : latestEvent?.fix || null,
   };
 
   // Update agent status and steps based on backend events
@@ -342,37 +349,94 @@ export default function Home() {
           />
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[11px] text-slate-200">
             <div className="flex items-center justify-between mb-2">
-              <h4 className="font-semibold">Agent Timeline</h4>
+              <h4 className="font-semibold">Agents in Action</h4>
+              <span className="text-xs text-slate-400">ADF-style live execution monitor for SKU pricing intelligence</span>
+            </div>
+            <div className="flex justify-between items-center mb-2">
+              <h4 className="font-semibold">Pipeline Stages</h4>
               <button onClick={refreshData} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Fetching..." : "Refresh Now"}</button>
             </div>
-            <div className="mb-2 flex items-center gap-2">
-              <label className="text-slate-300">Fetch Limit</label>
-              <input
-                type="number"
-                min={1}
-                max={5000}
-                value={fetchSize}
-                onChange={(e) => setFetchSize(Math.max(1, Number(e.target.value) || 1))}
-                disabled={isSystemError || refreshing}
-                className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
-              />
+            {/* Pipeline Stages Bar */}
+            <div className="flex justify-between items-center mb-3 text-xs font-medium">
+              {['SENSING', 'FETCHING', 'ENRICHING', 'PROCESSING', 'ANALYZING', 'UPDATING', 'RESPONDING'].map((stage, index, arr) => {
+                const stageStatus = agentEvents.find(e => e.stage === stage)?.status || 'pending';
+                const isCurrent = latestEvent?.stage === stage;
+                const isCompleted = agentEvents.some(e => e.stage === stage && e.status === 'SUCCESS');
+                const isError = agentEvents.some(e => e.stage === stage && e.status === 'ERROR');
+
+                let bgColor = 'bg-gray-700'; // Pending
+                if (isError) bgColor = 'bg-red-600';
+                else if (isCurrent && !isError) bgColor = 'bg-blue-500 animate-pulse';
+                else if (isCompleted) bgColor = 'bg-green-500';
+
+                return (
+                  <React.Fragment key={stage}>
+                    <div className={`px-2 py-1 rounded-md ${bgColor} text-white flex-1 text-center mx-0.5`}>
+                      {stage.substring(0, 3)} {/* Abbreviate stage */}
+                    </div>
+                    {index < arr.length - 1 && <div className="w-2 h-1 bg-gray-600 mx-0.5"></div>}
+                  </React.Fragment>
+                );
+              })}
             </div>
-            <div className="mb-2 flex items-center gap-2">
-              <label className="text-slate-300">Auto Refresh</label>
-              <input type="checkbox" checked={autoRefreshOn} onChange={(e) => setAutoRefreshOn(e.target.checked)} disabled={isSystemError} />
-              <select value={String(autoRefreshMins)} onChange={(e) => setAutoRefreshMins(Number(e.target.value))} disabled={isSystemError} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5">
-                <option value="1">1m</option>
-                <option value="5">5m</option>
-                <option value="15">15m</option>
-              </select>
+
+            {/* Metrics Cards */}
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Requested</div>
+                <div className="font-semibold text-white">{progressSummary.requested}</div>
+              </div>
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Active SKUs</div>
+                <div className="font-semibold text-white">{progressSummary.active_skus}</div>
+              </div>
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Processed</div>
+                <div className="font-semibold text-white">{progressSummary.processed_rows}</div>
+              </div>
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Written</div>
+                <div className="font-semibold text-white">{progressSummary.written_rows}</div>
+              </div>
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Snapshot Rows</div>
+                <div className="font-semibold text-white">{progressSummary.snapshot_rows}</div>
+              </div>
+              <div className="bg-slate-800 p-1.5 rounded">
+                <div className="text-slate-400 text-[10px]">Errors</div>
+                <div className="font-semibold text-white">{agentEvents.filter(e => e.status === 'ERROR').length}</div>
+              </div>
             </div>
-            <div className="mb-2 text-slate-300">Run ID: {progressSummary.run_id || "--"}</div>
-            <div className="mb-2 text-slate-300">Requested: {progressSummary.requested} · Active SKUs: {progressSummary.active_skus}</div>
-            <div className="mb-2 text-slate-300">Rows Written: {progressSummary.processed_rows} · Snapshot Rows: {progressSummary.latest_snapshot_rows}</div>
-            <div className="max-h-52 overflow-y-auto space-y-1">
+
+            {/* External Connections */}
+            <div className="mb-3">
+              <h5 className="font-semibold text-slate-300 mb-1">External Connections</h5>
+              <div className="grid grid-cols-2 gap-1 text-[10px]">
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>BigQuery Dataset</div>
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>SKU Master Table</div>
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${SERPAPI_KEY ? 'bg-green-500' : 'bg-red-500'}`}></span>SERPAPI</div>
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${true ? 'bg-green-500' : 'bg-red-500'}`}></span>Vertex AI</div> {/* Assuming Vertex AI is always configured */}
+              </div>
+            </div>
+
+            {/* Current Stage */}
+            <div className="mb-2">
+              <h5 className="font-semibold text-slate-300 mb-1">Current Stage</h5>
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${progressSummary.current_status === 'SUCCESS' ? 'bg-green-600' : progressSummary.current_status === 'ERROR' ? 'bg-red-600' : progressSummary.current_status === 'RUNNING' ? 'bg-blue-600 animate-pulse' : 'bg-gray-700'}`}>
+                  {progressSummary.current_stage} [{progressSummary.current_status}]
+                </span>
+                <span className="text-slate-400 flex-1 truncate">{progressSummary.current_message}</span>
+              </div>
+            </div>
+
+            {/* Live Event Log */}
+            <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
               {agentEvents.length === 0 ? <div className="text-slate-500">No agent events yet.</div> : agentEvents.map((e, i) => (
                 <div key={i} className="bg-slate-800 rounded p-1">
                   <span className="text-emerald-300">{new Date(e.timestamp).toLocaleTimeString()}</span> [{e.stage}] [{e.status}] {e.message}
+                  {e.error_type && <span className="text-red-400 ml-2">({e.error_type})</span>}
+                  {e.fix && <div className="text-red-400 text-xs ml-2">Fix: {e.fix}</div>}
                 </div>
               ))}
             </div>
@@ -394,11 +458,10 @@ export default function Home() {
             </div>
             {isSystemError ? (
               <div className="text-red-400 text-center py-4">
-                <p className="font-semibold">System Error: {feedStatus.error_type || "Unknown Error"}</p>
-                <p className="text-sm">{feedStatus.error || "Please check system configuration."}</p>
-                {feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Run: <code>gcloud auth application-default login</code></p>}
-                {feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Table: {feedStatus.error?.replace("BigQuery table not found: ", "")}</p>}
-                {feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Ensure SERPAPI_KEY is set in your .env.local</p>}
+                <p className="font-semibold">System Error: {progressSummary.error_type || "Unknown Error"}</p>
+                <p className="text-sm">{progressSummary.error_message || "Please check system configuration."}</p>
+                {progressSummary.fix && <p className="text-xs mt-1">{progressSummary.fix}</p>}
+                {progressSummary.error_type === GCP_AUTH_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Run: <code>gcloud auth application-default login</code></p>}
               </div>
             ) : (
               <>

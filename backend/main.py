@@ -9,7 +9,7 @@ from google.auth import default, exceptions as google_auth_exceptions
 from agents.integration_agent import IntegrationAgent
 from schemas.api import ChatRequest, ActionRequest
 from core.auth.rbac import require_permission
-from data.external_feeds import CompetitorPriceFeed
+from data.external_feeds import CompetitorPriceFeed, EventStage # Import EventStage
 from data.bigquery_client import BigQueryClient, bq_client_instance # Import the global instance
 
 # --- Environment Loading ---
@@ -43,6 +43,8 @@ GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
 BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET")
 SKU_MASTER_TABLE_ENV = os.environ.get("SKU_MASTER_TABLE")
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
+VERTEX_MODEL = os.environ.get("VERTEX_MODEL")
+VERTEX_AI_LOCATION = os.environ.get("VERTEX_AI_LOCATION")
 
 # Use GCP_PROJECT_ID if available, otherwise fall back to GOOGLE_CLOUD_PROJECT
 EFFECTIVE_PROJECT_ID = GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT
@@ -54,11 +56,11 @@ logger.info(f"Effective Project ID: {EFFECTIVE_PROJECT_ID or 'Not Set'}")
 logger.info(f"BIGQUERY_DATASET: {BIGQUERY_DATASET or 'Not Set'}")
 logger.info(f"SKU_MASTER_TABLE: {SKU_MASTER_TABLE_ENV or 'Not Set'}")
 logger.info(f"SERPAPI_KEY: {'Set' if SERPAPI_KEY else 'Not Set'}")
+logger.info(f"VERTEX_MODEL: {VERTEX_MODEL or 'Not Set'}")
+logger.info(f"VERTEX_AI_LOCATION: {VERTEX_AI_LOCATION or 'Not Set'}")
 logger.info(f"-------------------------------")
 
-# --- Authentication Check ---
-# This check will run once when the FastAPI app starts.
-# If bq_client_instance is None, it means GCP auth failed during its initialization.
+# --- Constants for Error Responses ---
 GCP_AUTH_ERROR_RESPONSE = {
     "status": "error",
     "error_type": "GCP_AUTH_MISSING",
@@ -70,8 +72,30 @@ BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE = {
     "status": "error",
     "error_type": "BIGQUERY_TABLE_MISSING",
     "message": "BigQuery table not found: {table_name}",
-    "fix": "Create table or update BIGQUERY_DATASET in .env.local"
+    "fix": "Create table or update BIGQUERY_DATASET / SKU_MASTER_TABLE in .env.local"
 }
+
+SERPAPI_KEY_MISSING_RESPONSE = {
+    "status": "error",
+    "error_type": "CONFIG_ERROR",
+    "message": "SERPAPI_KEY environment variable not set.",
+    "fix": "Add SERPAPI_KEY to .env.local and restart backend."
+}
+
+VERTEX_AI_CONFIG_ERROR_RESPONSE = {
+    "status": "error",
+    "error_type": "VERTEX_AI_CONFIG_ERROR",
+    "message": "Vertex AI model or location configuration missing.",
+    "fix": "Set VERTEX_MODEL and VERTEX_AI_LOCATION in .env.local."
+}
+
+def get_structured_error(error_type: str, message: str, fix: str):
+    return {
+        "status": "error",
+        "error_type": error_type,
+        "message": message,
+        "fix": fix
+    }
 
 def check_gcp_auth():
     if bq_client_instance is None or bq_client_instance._client is None:
@@ -85,19 +109,63 @@ def check_gcp_auth():
 def check_bq_table_exists(table_full_id: str) -> bool:
     """Checks if a BigQuery table exists."""
     try:
-        bq_client_instance._client.get_table(table_full_id)
-        return True
+        if bq_client_instance and bq_client_instance._client:
+            bq_client_instance._client.get_table(table_full_id)
+            return True
+        return False
     except Exception as e:
         logger.warning(f"Table {table_full_id} not found: {e}")
         return False
 
-def get_structured_error(error_type: str, message: str, fix: str):
-    return {
-        "status": "error",
-        "error_type": error_type,
-        "message": message,
-        "fix": fix
+# --- Startup Validation and Status ---
+def validate_environment():
+    """Validates essential environment configurations at startup."""
+    config_status = {
+        "gcp_project": EFFECTIVE_PROJECT_ID or "Not Set",
+        "bigquery_dataset": BIGQUERY_DATASET or "Not Set",
+        "sku_master_table": SKU_MASTER_TABLE_ENV or "Not Set",
+        "serpapi": "configured" if SERPAPI_KEY else "missing",
+        "vertex_model": VERTEX_MODEL or "Not Set",
+        "vertex_location": VERTEX_AI_LOCATION or "Not Set",
+        "status": "ready"
     }
+
+    errors = []
+    if not EFFECTIVE_PROJECT_ID:
+        errors.append(get_structured_error("GCP_PROJECT_MISSING", "GCP Project ID not set.", "Set GOOGLE_CLOUD_PROJECT or GCP_PROJECT_ID in .env.local."))
+    if not BIGQUERY_DATASET:
+        errors.append(get_structured_error("BIGQUERY_DATASET_MISSING", "BIGQUERY_DATASET not set.", "Set BIGQUERY_DATASET in .env.local."))
+    if not SKU_MASTER_TABLE_ENV:
+        errors.append(get_structured_error("SKU_MASTER_TABLE_MISSING", "SKU_MASTER_TABLE not set.", "Set SKU_MASTER_TABLE in .env.local."))
+    if not SERPAPI_KEY:
+        errors.append(SERPAPI_KEY_MISSING_RESPONSE)
+    if not VERTEX_MODEL or not VERTEX_AI_LOCATION:
+        errors.append(VERTEX_AI_CONFIG_ERROR_RESPONSE)
+
+    if errors:
+        config_status["status"] = "error"
+        config_status["errors"] = errors
+    elif not bq_client_instance or not bq_client_instance._client:
+        config_status["status"] = "error"
+        config_status["errors"] = [GCP_AUTH_ERROR_RESPONSE]
+    else:
+        # Check BigQuery tables existence
+        snapshots_table = f"{EFFECTIVE_PROJECT_ID}.{BIGQUERY_DATASET}.competitor_price_snapshots"
+        runs_table = f"{EFFECTIVE_PROJECT_ID}.{BIGQUERY_DATASET}.competitor_price_feed_runs"
+        sku_master_table = SKU_MASTER_TABLE_ENV or f"{EFFECTIVE_PROJECT_ID}.{BIGQUERY_DATASET}.sku_master"
+
+        if not check_bq_table_exists(snapshots_table):
+            errors.append(BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=snapshots_table))
+        if not check_bq_table_exists(runs_table):
+            errors.append(BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=runs_table))
+        if not check_bq_table_exists(sku_master_table):
+            errors.append(BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=sku_master_table))
+        
+        if errors:
+            config_status["status"] = "error"
+            config_status["errors"] = errors
+
+    return config_status
 
 # --- API Endpoints ---
 
@@ -105,24 +173,13 @@ def get_structured_error(error_type: str, message: str, fix: str):
 async def health():
     try:
         check_gcp_auth() # Check auth for health endpoint too
-        # Also check if essential tables exist
-        project = EFFECTIVE_PROJECT_ID
-        dataset = BIGQUERY_DATASET
-        if not project or not dataset:
-            return JSONResponse(content=get_structured_error("CONFIG_ERROR", "GCP Project ID or BIGQUERY_DATASET not set.", "Check .env.local"), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        
+        # Perform full environment validation
+        config_status = validate_environment()
+        if config_status["status"] == "error":
+            return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        competitor_price_snapshots_table = f"{project}.{dataset}.competitor_price_snapshots"
-        competitor_price_feed_runs_table = f"{project}.{dataset}.competitor_price_feed_runs"
-        sku_master_table = os.environ.get("SKU_MASTER_TABLE", f"{project}.{dataset}.sku_master")
-
-        if not check_bq_table_exists(competitor_price_snapshots_table):
-            return JSONResponse(content=BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=competitor_price_snapshots_table), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-        if not check_bq_table_exists(competitor_price_feed_runs_table):
-            return JSONResponse(content=BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=competitor_price_feed_runs_table), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-        if not check_bq_table_exists(sku_master_table):
-            return JSONResponse(content=BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=sku_master_table), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        return {"status": "ok", "project": EFFECTIVE_PROJECT_ID, "dataset": BIGQUERY_DATASET}
+        return {"status": "ok", "config": config_status}
     except HTTPException as e:
         return JSONResponse(content=e.detail, status_code=e.status_code)
     except RuntimeError as e: # Catch auth errors from bq_client_instance
@@ -188,6 +245,11 @@ async def run_competitor_price_feed(limit: int = 500):
     """
     try:
         check_gcp_auth()
+        # Validate environment config before starting feed
+        config_status = validate_environment()
+        if config_status["status"] == "error":
+            return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         feed = CompetitorPriceFeed()
         result = await feed.run(limit=limit)
         result["requested_limit"] = limit
@@ -209,11 +271,13 @@ async def run_competitor_price_feed(limit: int = 500):
 async def get_competitor_price_feed_status():
     try:
         check_gcp_auth()
+        config_status = validate_environment()
+        if config_status["status"] == "error":
+            return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         project = EFFECTIVE_PROJECT_ID
         dataset = BIGQUERY_DATASET
-        if not project or not dataset:
-            raise RuntimeError("GCP Project ID or BIGQUERY_DATASET not set.")
-
+        
         feed_runs_table = f"{project}.{dataset}.competitor_price_feed_runs"
         sku_master_table = os.environ.get("SKU_MASTER_TABLE", f"{project}.{dataset}.sku_master")
         snapshots_table = f"{project}.{dataset}.competitor_price_snapshots"
@@ -276,6 +340,10 @@ async def get_latest_competitor_prices():
     """
     try:
         check_gcp_auth()
+        config_status = validate_environment()
+        if config_status["status"] == "error":
+            return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+            
         feed = CompetitorPriceFeed() # This might also raise auth errors if SERPAPI_KEY is missing
         
         # SQL to get the latest timestamp and then all rows for that timestamp
@@ -323,11 +391,13 @@ async def dashboard(
         if tab != "overview":
             return {"tab": tab, "data": []}
 
+        config_status = validate_environment()
+        if config_status["status"] == "error":
+            return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         project = EFFECTIVE_PROJECT_ID
         dataset = BIGQUERY_DATASET
-        if not project or not dataset:
-            raise RuntimeError("GCP Project ID or BIGQUERY_DATASET not set.")
-
+        
         snapshots_table = f"{project}.{dataset}.competitor_price_snapshots"
         sku_master_table = os.environ.get("SKU_MASTER_TABLE", f"{project}.{dataset}.sku_master")
 
@@ -428,3 +498,68 @@ async def dashboard(
                 "rows": [],
                 "error": "Live feed unavailable. Check GCP authentication and SERPAPI connectivity."
             }, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+# New endpoint to get agent events and status
+@app.get("/agent/status")
+async def get_agent_status():
+    """
+    Returns the current status of the agent, including configuration, active run,
+    pipeline stages, and recent events.
+    """
+    config_status = validate_environment()
+    
+    # Get the latest competitor price feed run details
+    latest_run_details = None
+    if bq_client_instance and bq_client_instance._client:
+        try:
+            project = EFFECTIVE_PROJECT_ID
+            dataset = BIGQUERY_DATASET
+            if project and dataset:
+                runs_table = f"{project}.{dataset}.competitor_price_feed_runs"
+                if check_bq_table_exists(runs_table):
+                    sql = f"SELECT * FROM `{runs_table}` ORDER BY timestamp DESC LIMIT 1"
+                    rows = await bq_client_instance.query(sql, {})
+                    if rows:
+                        latest_run_details = rows[0]
+        except Exception as e:
+            logger.error(f"Could not fetch latest run details: {e}")
+
+    # Get the latest events from the CompetitorPriceFeed instance (if available and active)
+    # This is a simplification; a persistent event store would be more robust.
+    latest_events = []
+    active_run_id = None
+    if CompetitorPriceFeed.current_run_id: # Accessing class variable directly for simplicity
+        active_run_id = CompetitorPriceFeed.current_run_id
+        latest_events = CompetitorPriceFeed.run_events[-20:] # Get last 20 events
+
+    # Determine overall status
+    overall_status = "ready"
+    if config_status["status"] == "error":
+        overall_status = "error"
+    elif not latest_run_details or latest_run_details.get("status") == "error":
+        overall_status = "warning" # Indicates a problem with the last run
+    elif active_run_id and not latest_events:
+        overall_status = "warning" # Run started but no events yet
+    elif active_run_id and latest_events[-1].get("stage") == "ERROR":
+        overall_status = "error"
+    elif active_run_id and latest_events[-1].get("stage") == "COMPLETE":
+        overall_status = "ready" # Last run completed successfully
+    elif active_run_id:
+        overall_status = "running" # A run is active
+
+    return {
+        "config_status": config_status,
+        "active_run": {
+            "run_id": active_run_id,
+            "start_time": CompetitorPriceFeed.run_start_time if active_run_id else None,
+            "current_stage": latest_events[-1].get("stage") if latest_events else None,
+            "current_status": latest_events[-1].get("status") if latest_events else None,
+            "current_message": latest_events[-1].get("message") if latest_events else None,
+            "error_type": latest_events[-1].get("error_type") if latest_events and latest_events[-1].get("status") == "ERROR" else None,
+            "fix": latest_events[-1].get("fix") if latest_events and latest_events[-1].get("status") == "ERROR" else None,
+        },
+        "run_history": [latest_run_details] if latest_run_details else [], # Simplified history
+        "events": latest_events,
+        "overall_status": overall_status
+    }
+
