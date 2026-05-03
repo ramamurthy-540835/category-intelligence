@@ -62,7 +62,7 @@ class CompetitorPriceFeed:
 
     def _log_event(self, stage: str, status: str, message: str, details: Dict[str, Any] = None):
         """Logs a structured event for the current run."""
-        details = details or {}
+        details = details or {} # Ensure details is always a dict
         if not self.current_run_id:
             self.current_run_id = str(uuid.uuid4()) # Start a new run if none exists
             self.run_start_time = datetime.datetime.now().isoformat()
@@ -93,7 +93,7 @@ class CompetitorPriceFeed:
                 self.bq_client._client.get_table(self.FULL_EVENT_LOG_TABLE_ID)
                 self.bq_client._client.insert_rows_json(self.FULL_EVENT_LOG_TABLE_ID, [event])
             except Exception as table_err:
-                # Log a warning if the table is missing or inaccessible, but don't fail the main process
+                # Log a warning if the table is missing or inaccessible
                 log.warning(f"Could not log event to BigQuery table {self.FULL_EVENT_LOG_TABLE_ID}: {table_err}")
         else:
             log.warning("BigQuery client not available or not initialized, skipping event logging to BigQuery.")
