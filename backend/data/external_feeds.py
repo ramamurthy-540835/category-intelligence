@@ -1,157 +1,216 @@
 import os
-import logging
 import asyncio
 import aiohttp
 import re
-from datetime import datetime
+import datetime
 import uuid
 from typing import List, Dict, Any, Optional
 
 from google.cloud import bigquery
+from google.auth import default, exceptions as google_auth_exceptions
+
+# Assume BigQueryClient is available and correctly configured
+from .bigquery_client import BigQueryClient, bq_client_instance
 
 log = logging.getLogger(__name__)
 
+SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
+
 class CompetitorPriceFeed:
-  SERPAPI_URL = "https://serpapi.com/search.json"
-  COMPETITOR_NAME = "Google Shopping"
-  BQ_TABLE_NAME = "competitor_price_snapshots"
-  BQ_RUNS_TABLE_NAME = "competitor_price_feed_runs"
+    SERPAPI_URL = "https://serpapi.com/search.json"
+    COMPETITOR_NAME = "Google Shopping"
+    # Use the dataset from the environment variable
+    PROJECT = os.environ.get("GCP_PROJECT_ID", "ctoteam")
+    DATASET = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
+    TABLE_NAME = "competitor_price_snapshots"
+    RUNS_TABLE_NAME = "competitor_price_feed_runs"
+    FULL_TABLE_ID = f"{PROJECT}.{DATASET}.{TABLE_NAME}"
+    FULL_RUNS_TABLE_ID = f"{PROJECT}.{DATASET}.{RUNS_TABLE_NAME}"
 
-  def __init__(self):
-    self.api_key: Optional[str] = os.environ.get('SERPAPI_KEY')
-    if not self.api_key:
-      raise ValueError("SERPAPI_KEY environment variable not set.")
+    def __init__(self):
+        if not SERPAPI_KEY:
+            raise ValueError("SERPAPI_KEY environment variable not set.")
+        
+        # Ensure BigQuery client is initialized and authenticated
+        if bq_client_instance is None or bq_client_instance._client is None:
+            raise RuntimeError("GCP_AUTH_MISSING: BigQuery client not initialized due to missing credentials.")
+        self.bq_client = bq_client_instance
+        self.sku_master_table_id: str = os.environ.get(
+            "SKU_MASTER_TABLE",
+            f"{self.PROJECT}.{self.DATASET}.sku_master"
+        )
 
-    self.project_id: str = os.environ.get('GCP_PROJECT_ID', 'ctoteam')
-    self.dataset_id: str = os.environ.get('BIGQUERY_DATASET', 'category_intelligence')
-    self.full_table_id: str = f"{self.project_id}.{self.dataset_id}.{self.BQ_TABLE_NAME}"
-    self.runs_table_id: str = f"{self.project_id}.{self.dataset_id}.{self.BQ_RUNS_TABLE_NAME}"
-    self.bq_client: bigquery.Client = bigquery.Client(project=self.project_id)
-    self.sku_master_table_id: str = os.environ.get(
-      "SKU_MASTER_TABLE",
-      f"{self.project_id}.{self.dataset_id}.sku_master"
-    )
+    async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Fetches SKUs from BigQuery that are marked for tracking."""
+        sql = f"""
+            SELECT sku_id, sku_name, COALESCE(active_flag, TRUE) as is_active
+            FROM `{self.sku_master_table_id}`
+            WHERE COALESCE(active_flag, TRUE) = TRUE
+            LIMIT @limit
+        """
+        try:
+            rows = await self.bq_client.query(sql, {"limit": limit})
+            return rows
+        except Exception as e:
+            log.error(f"Error fetching SKUs to track: {e}")
+            return []
 
-  def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
-    sql = f"""
-      SELECT
-        CAST(sku_id AS STRING) AS sku_id,
-        CAST(COALESCE(sku_name, sku_id) AS STRING) AS name,
-        CAST(COALESCE(our_price, 0) AS FLOAT64) AS our_price
-      FROM `{self.sku_master_table_id}`
-      WHERE COALESCE(active_flag, TRUE) = TRUE
-      LIMIT @limit
-    """
-    job = self.bq_client.query(
-      sql,
-      job_config=bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("limit", "INT64", limit)]
-      ),
-    )
-    rows = list(job.result())
-    return [dict(r.items()) for r in rows]
+    async def fetch_price(self, session: aiohttp.ClientSession, sku: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Fetches live price for a single SKU using SerpApi."""
+        params = {
+            "engine": "google_shopping",
+            "api_key": SERPAPI_KEY,
+            "q": f"{sku.get('sku_name', sku.get('sku_id'))}", # Query for the SKU name or ID
+            "hl": "en",
+            "gl": "us",
+            "device": "desktop",
+        }
+        try:
+            async with session.get(self.SERPAPI_URL, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
 
-  async def fetch_price(self, session: aiohttp.ClientSession, sku: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    params: Dict[str, str] = {
-      'engine': 'google_shopping',
-      'q': sku['name'],
-      'api_key': self.api_key
-    }
-    try:
-      async with session.get(self.SERPAPI_URL, params=params) as response:
-        if response.status != 200:
-          log.error("SerpAPI request failed for %s: %s", sku['sku_id'], response.status)
-          return None
+                if "error" in data:
+                    log.error(f"SerpApi error for SKU {sku.get('sku_id')}: {data['error']}")
+                    return None
 
-        json_data: Dict[str, Any] = await response.json()
-        shopping_results: Optional[List[Dict[str, Any]]] = json_data.get('shopping_results')
-        if not shopping_results or not shopping_results[0].get('price'):
-          return None
+                products = data.get("products", [])
+                if not products:
+                    return None
 
-        price_str: str = shopping_results[0]['price']
-        cleaned_price_str: str = re.sub(r'[^\d.]', '', price_str)
-        competitor_price: float = float(cleaned_price_str)
+                # Find the most relevant product (e.g., first one)
+                product = products[0]
+                price_str = product.get('price')
+                competitor_price = 0.0
+                if price_str:
+                    cleaned_price_str = re.sub(r'[^\d.]', '', price_str)
+                    try:
+                        competitor_price = float(cleaned_price_str)
+                    except ValueError:
+                        log.warning(f"Could not parse price '{price_str}' for SKU {sku.get('sku_id')}")
+
+                return {
+                    "sku_id": sku.get("sku_id"),
+                    "sku_name": sku.get("sku_name"),
+                    "competitor_price": competitor_price,
+                    "competitor_name": product.get("source", self.COMPETITOR_NAME),
+                    "product_url": product.get("link"),
+                    "image_url": product.get("thumbnail", product.get("image")),
+                    "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
+                    "last_checked": datetime.datetime.now().isoformat()
+                }
+        except aiohttp.ClientError as e:
+            log.error(f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}")
+            return None
+        except Exception as e:
+            log.error(f"Unexpected error fetching price for SKU {sku.get('sku_id')}: {e}")
+            return None
+
+    async def fetch_live_snapshot(self, limit: int = 500) -> Dict[str, Any]:
+        """Fetches live prices for multiple SKUs and returns a snapshot."""
+        skus_to_track = await self.fetch_skus_to_track(limit=limit)
+        if not skus_to_track:
+            return {"status": "no_skus_to_track", "rows": [], "timestamp": None}
+
+        rows_to_write = []
+        async with aiohttp.ClientSession() as session:
+            tasks = [self.fetch_price(session, sku) for sku in skus_to_track]
+            results = await asyncio.gather(*tasks)
+
+            for result in results:
+                if result and result.get("sku_id"): # Ensure we have a valid SKU ID
+                    rows_to_write.append(result)
+
+        timestamp = datetime.datetime.now().isoformat()
+        
+        # Write to BigQuery
+        rows_written = self._write_to_bq(rows_to_write, timestamp)
+        self._write_run_metadata(
+            run_id=str(uuid.uuid4()),
+            timestamp=timestamp,
+            skus_fetched=len(skus_to_track),
+            rows_written=rows_written,
+            status="success" if rows_written > 0 else "partial"
+        )
 
         return {
-          'sku_id': sku['sku_id'],
-          'sku_name': sku['name'],
-          'competitor': self.COMPETITOR_NAME,
-          'competitor_price': competitor_price,
-          'in_stock': True,
-          'retailer_price': sku['our_price']
+            "status": "success",
+            "rows": rows_to_write,
+            "timestamp": timestamp,
+            "rows_written": rows_written,
+            "skus_processed": len(skus_to_track)
         }
-    except Exception as e:
-      log.error("Price fetch failed for %s: %s", sku['sku_id'], e)
-      return None
 
-  async def fetch_live_snapshot(self, limit: int = 500) -> Dict[str, Any]:
-    start_time = datetime.utcnow().isoformat()
-    skus = self.fetch_skus_to_track(limit=limit)
-    async with aiohttp.ClientSession() as session:
-      tasks = [self.fetch_price(session, sku) for sku in skus]
-      results = await asyncio.gather(*tasks)
+    def _write_to_bq(self, rows: List[Dict[str, Any]], timestamp: str) -> int:
+        """Writes fetched price data to BigQuery."""
+        if not rows:
+            return 0
+        
+        # Add timestamp to each row for partitioning/clustering if applicable
+        for row in rows:
+            row["snapshot_time"] = timestamp
+            # Ensure all expected columns are present, even if None
+            row.setdefault("sku_id", None)
+            row.setdefault("sku_name", None)
+            row.setdefault("competitor_price", 0.0)
+            row.setdefault("competitor_name", None)
+            row.setdefault("product_url", None)
+            row.setdefault("image_url", None)
+            row.setdefault("in_stock", True) # Default to True if not provided by SerpApi
+            row.setdefault("last_checked", timestamp)
 
-    rows: List[Dict[str, Any]] = []
-    for row in [r for r in results if r]:
-      our_price = row['retailer_price']
-      competitor_price = row['competitor_price']
-      price_gap_pct = ((our_price - competitor_price) / our_price) * 100 if our_price else None
-      row['price_gap_pct'] = price_gap_pct
-      row['snapshot_time'] = start_time
-      row['url'] = ""
-      rows.append(row)
+        try:
+            # Use the bq_client instance from BigQueryClient
+            errors = self.bq_client._client.insert_rows_json(self.FULL_TABLE_ID, rows)
+            if errors:
+                log.error("BigQuery insert errors: %s", errors)
+                return 0
+            log.info(f"Successfully inserted {len(rows)} rows into {self.FULL_TABLE_ID}")
+            return len(rows)
+        except Exception as e:
+            log.error(f"Error writing to BigQuery table {self.FULL_TABLE_ID}: {e}")
+            return 0
 
-    return {"timestamp": start_time, "rows": rows, "skus_fetched": len(skus)}
+    def _write_run_metadata(
+        self,
+        run_id: str,
+        timestamp: str,
+        skus_fetched: int,
+        rows_written: int,
+        status: str,
+    ) -> None:
+        """Writes metadata about the feed run to BigQuery."""
+        metadata = {
+            "run_id": run_id,
+            "timestamp": timestamp,
+            "skus_fetched": skus_fetched,
+            "rows_written": rows_written,
+            "status": status,
+        }
+        try:
+            # Use the bq_client instance from BigQueryClient
+            errors = self.bq_client._client.insert_rows_json(self.FULL_RUNS_TABLE_ID, [metadata])
+            if errors:
+                log.error("BigQuery run metadata insert errors: %s", errors)
+            else:
+                log.info(f"Successfully inserted run metadata into {self.FULL_RUNS_TABLE_ID}")
+        except Exception as e:
+            log.error(f"Error writing run metadata to BigQuery table {self.FULL_RUNS_TABLE_ID}: {e}")
 
-  async def run(self, limit: int = 500) -> Dict[str, Any]:
-    run_id = str(uuid.uuid4())
-    snapshot = await self.fetch_live_snapshot(limit=limit)
-    rows_written = self._write_to_bq(snapshot["rows"])
-    self._write_run_metadata(
-      run_id=run_id,
-      timestamp=snapshot["timestamp"],
-      skus_fetched=snapshot.get("skus_fetched", 0),
-      rows_written=rows_written,
-      status="success" if rows_written > 0 else "partial"
-    )
-    return {
-      'run_id': run_id,
-      'skus_fetched': snapshot.get("skus_fetched", 0),
-      'rows_written': rows_written,
-      'timestamp': snapshot["timestamp"]
-    }
-
-  def _write_to_bq(self, rows: List[Dict[str, Any]]) -> int:
-    if not rows:
-      return 0
-    try:
-      errors = self.bq_client.insert_rows_json(self.full_table_id, rows)
-      if errors:
-        log.error("BigQuery insert errors: %s", errors)
-        return 0
-      return len(rows)
-    except Exception as e:
-      log.error("Failed writing to BigQuery: %s", e)
-      return 0
-
-  def _write_run_metadata(
-    self,
-    run_id: str,
-    timestamp: str,
-    skus_fetched: int,
-    rows_written: int,
-    status: str,
-  ) -> None:
-    try:
-      self.bq_client.insert_rows_json(
-        self.runs_table_id,
-        [{
-          "run_id": run_id,
-          "timestamp": timestamp,
-          "skus_fetched": skus_fetched,
-          "rows_written": rows_written,
-          "status": status,
-        }],
-      )
-    except Exception as e:
-      log.error("Failed writing run metadata: %s", e)
+    async def run(self, limit: int = 500) -> Dict[str, Any]:
+        """Main entry point to run the feed."""
+        try:
+            # Check for GCP auth here as well, though __init__ should catch it
+            if bq_client_instance is None or bq_client_instance._client is None:
+                raise RuntimeError("GCP_AUTH_MISSING: BigQuery client not available.")
+            
+            return await self.fetch_live_snapshot(limit=limit)
+        except RuntimeError as e:
+            log.error(f"Feed run failed due to auth error: {e}")
+            return {"status": "error", "message": str(e), "error_type": "GCP_AUTH_MISSING"}
+        except ValueError as e: # SERPAPI_KEY missing
+            log.error(f"Feed run failed due to configuration error: {e}")
+            return {"status": "error", "message": str(e), "error_type": "CONFIG_ERROR"}
+        except Exception as e:
+            log.error(f"Feed run failed unexpectedly: {e}")
+            return {"status": "error", "message": str(e)}
