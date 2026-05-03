@@ -107,6 +107,25 @@ export default function Home() {
   const loadOverview = useCallback(async () => {
     const params = new URLSearchParams({ q: query, stock: stockFilter, limit: String(fetchSize), offset: "0" });
     const res = await fetch(`/api/dashboard/overview?${params.toString()}`, { cache: "no-store" });
+    
+    if (!res.ok) {
+      // Handle non-OK responses more gracefully
+      let errorData = { message: `HTTP error! status: ${res.status}`, error_type: "HTTP_ERROR" };
+      try {
+        const errorJson = await res.json();
+        errorData = { ...errorData, ...errorJson };
+      } catch (e) {
+        // Ignore if response is not JSON
+      }
+      setSource("Error");
+      setAlerts([{ priority: "P1", sku: "System", msg: `Error loading data: ${errorData.message}` }]);
+      setRows([]);
+      setTimestamp("");
+      setFeedStatus({ status: "error", error: errorData.message, error_type: errorData.error_type });
+      setCurrentRunId(null);
+      return;
+    }
+
     const data: OverviewPayload = await res.json();
 
     if (data.error_type === GCP_AUTH_MISSING_ERROR_TYPE) {
@@ -148,6 +167,23 @@ export default function Home() {
 
   const loadFeedStatus = useCallback(async () => {
     const res = await fetch("/api/feeds/prices/status", { cache: "no-store" });
+    
+    if (!res.ok) {
+      let errorData = { message: `HTTP error! status: ${res.status}`, error_type: "HTTP_ERROR" };
+      try {
+        const errorJson = await res.json();
+        errorData = { ...errorData, ...errorJson };
+      } catch (e) {
+        // Ignore if response is not JSON
+      }
+      setFeedStatus({ status: "error", error: errorData.message, error_type: errorData.error_type });
+      if (source !== "Error") {
+        setSource("Error");
+        setAlerts([{ priority: "P1", sku: "System", msg: `Error loading feed status: ${errorData.message}` }]);
+      }
+      return;
+    }
+
     const data: FeedStatus = await res.json();
 
     if (data.error_type === GCP_AUTH_MISSING_ERROR_TYPE) {
@@ -178,6 +214,7 @@ export default function Home() {
     }
     try {
       const res = await fetch(`/api/agent/events?run_id=${runId}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed to fetch events: ${res.status}`);
       const data = await res.json();
       if (data.events) {
         setAgentEvents(data.events);
@@ -197,6 +234,18 @@ export default function Home() {
     try {
       // Initiate the refresh and get the run_id
       const refreshRes = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST", cache: "no-store" });
+      
+      if (!refreshRes.ok) {
+        let errorData = { message: `HTTP error! status: ${refreshRes.status}`, error_type: "HTTP_ERROR" };
+        try {
+          const errorJson = await refreshRes.json();
+          errorData = { ...errorData, ...errorJson };
+        } catch (e) {
+          // Ignore if response is not JSON
+        }
+        throw new Error(errorData.message);
+      }
+
       const refreshData = await refreshRes.json();
 
       if (refreshData.status === "error") {
