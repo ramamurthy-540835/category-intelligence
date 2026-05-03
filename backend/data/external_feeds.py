@@ -4,7 +4,7 @@ import aiohttp
 import re
 import datetime
 import uuid
-import logging # Import the logging module
+import logging
 from typing import List, Dict, Any, Optional
 
 from google.cloud import bigquery
@@ -25,6 +25,7 @@ class CompetitorPriceFeed:
     DATASET = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
     TABLE_NAME = "competitor_price_snapshots"
     RUNS_TABLE_NAME = "competitor_price_feed_runs"
+    # Construct full table IDs using the DATASET variable
     FULL_TABLE_ID = f"{PROJECT}.{DATASET}.{TABLE_NAME}"
     FULL_RUNS_TABLE_ID = f"{PROJECT}.{DATASET}.{RUNS_TABLE_NAME}"
 
@@ -36,6 +37,7 @@ class CompetitorPriceFeed:
         if bq_client_instance is None or bq_client_instance._client is None:
             raise RuntimeError("GCP_AUTH_MISSING: BigQuery client not initialized due to missing credentials.")
         self.bq_client = bq_client_instance
+        # Construct SKU master table ID using the DATASET variable
         self.sku_master_table_id: str = os.environ.get(
             "SKU_MASTER_TABLE",
             f"{self.PROJECT}.{self.DATASET}.sku_master"
