@@ -86,19 +86,16 @@ class CompetitorPriceFeed:
         log.info(f"FEED_EVENT: {event}")
 
         # Attempt to log to BigQuery, but don't fail if it's not available or table is missing
-        try:
-            if self.bq_client._client: # Check if client is initialized
-                try:
-                    # Check if the event log table exists
-                    self.bq_client._client.get_table(self.FULL_EVENT_LOG_TABLE_ID)
-                    self.bq_client._client.insert_rows_json(self.FULL_EVENT_LOG_TABLE_ID, [event])
-                except Exception as table_err:
-                    # Log a warning if the table is missing or inaccessible
-                    log.warning(f"Could not log event to BigQuery table {self.FULL_EVENT_LOG_TABLE_ID}: {table_err}")
-            else:
-                log.warning("BigQuery client not available, skipping event logging to BigQuery.")
-        except Exception as e:
-            log.warning(f"An unexpected error occurred during BigQuery event logging: {e}")
+        if self.bq_client and self.bq_client._client: # Check if client is initialized and available
+            try:
+                # Check if the event log table exists
+                self.bq_client._client.get_table(self.FULL_EVENT_LOG_TABLE_ID)
+                self.bq_client._client.insert_rows_json(self.FULL_EVENT_LOG_TABLE_ID, [event])
+            except Exception as table_err:
+                # Log a warning if the table is missing or inaccessible
+                log.warning(f"Could not log event to BigQuery table {self.FULL_EVENT_LOG_TABLE_ID}: {table_err}")
+        else:
+            log.warning("BigQuery client not available or not initialized, skipping event logging to BigQuery.")
 
     async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Fetches SKUs from BigQuery that are marked for tracking."""
