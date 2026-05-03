@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react"; // Import React
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import AgentControlCenter from "@/components/chat/AgentControlCenter";
