@@ -34,6 +34,9 @@ if env_path_backend.exists():
 logging.basicConfig(level=logging.INFO) # Basic config for logging
 logger = logging.getLogger(__name__)
 
+# --- FastAPI App Instance ---
+app = FastAPI(title="Category Intelligence Agent")
+
 # --- Environment Variable Validation and Logging ---
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -425,4 +428,3 @@ async def dashboard(
                 "rows": [],
                 "error": "Live feed unavailable. Check GCP authentication and SERPAPI connectivity."
             }, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-
