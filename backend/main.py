@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -36,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 # --- FastAPI App Instance ---
 app = FastAPI(title="Category Intelligence Agent")
+FEED_RUN_LOCK = asyncio.Lock()
+ACTIVE_FEED_RUN_ID = None
 
 # --- Environment Variable Validation and Logging ---
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
@@ -245,13 +248,25 @@ async def run_competitor_price_feed(limit: int = 500):
     """
     try:
         check_gcp_auth()
+        global ACTIVE_FEED_RUN_ID
+        if FEED_RUN_LOCK.locked():
+            return JSONResponse(content={
+                "status": "running",
+                "message": "Feed run already in progress.",
+                "run_id": ACTIVE_FEED_RUN_ID,
+                "requested_limit": limit
+            }, status_code=status.HTTP_200_OK)
+
         # Validate environment config before starting feed
         config_status = validate_environment()
         if config_status["status"] == "error":
             return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        feed = CompetitorPriceFeed()
-        result = await feed.run(limit=limit)
+        async with FEED_RUN_LOCK:
+            feed = CompetitorPriceFeed()
+            ACTIVE_FEED_RUN_ID = feed.current_run_id
+            result = await feed.run(limit=limit)
+            ACTIVE_FEED_RUN_ID = result.get("run_id")
         result["requested_limit"] = limit
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
     except HTTPException as e:
@@ -265,6 +280,9 @@ async def run_competitor_price_feed(limit: int = 500):
     except Exception as e:
         logger.error(f"Failed to run competitor price feed: {e}")
         return JSONResponse(content=get_structured_error("FEED_ERROR", f"Failed to run competitor price feed: {e}", "Check feed logs"), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    finally:
+        if not FEED_RUN_LOCK.locked():
+            ACTIVE_FEED_RUN_ID = None
 
 
 @app.get("/feeds/prices/status")
@@ -314,11 +332,15 @@ async def get_competitor_price_feed_status():
                 "active_skus": source_rows[0].get("active_skus", 0) if source_rows else 0,
                 "latest_snapshot_rows": snap_rows[0].get("latest_snapshot_rows", 0) if snap_rows else 0,
             }
+        latest = rows[0]
+        latest_rows_written = latest.get("rows_written", 0) if isinstance(latest, dict) else 0
+        derived_status = "stale" if (latest_rows_written or 0) == 0 else "ok"
         return {
-            "status": "ok",
-            "latest_run": rows[0],
+            "status": derived_status,
+            "latest_run": latest,
             "active_skus": source_rows[0].get("active_skus", 0) if source_rows else 0,
             "latest_snapshot_rows": snap_rows[0].get("latest_snapshot_rows", 0) if snap_rows else 0,
+            "warning": "Latest refresh produced no new rows." if derived_status == "stale" else None,
         }
     except RuntimeError as e: # Catch our specific auth error or missing env vars
         logger.error(f"Failed to retrieve feed status: {e}")
@@ -563,3 +585,27 @@ async def get_agent_status():
         "overall_status": overall_status
     }
 
+
+@app.get("/agent/events")
+async def get_agent_events(run_id: str):
+    """Return recent events for a specific run from BigQuery event log table."""
+    try:
+        check_gcp_auth()
+        project = EFFECTIVE_PROJECT_ID
+        dataset = BIGQUERY_DATASET
+        events_table = f"{project}.{dataset}.feed_run_events"
+        if not check_bq_table_exists(events_table):
+            return {"run_id": run_id, "events": []}
+
+        sql = f"""
+            SELECT *
+            FROM `{events_table}`
+            WHERE run_id = @run_id
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """
+        rows = await bq_client_instance.query(sql, {"run_id": run_id})
+        return {"run_id": run_id, "events": rows}
+    except Exception as e:
+        logger.error(f"Failed to fetch agent events for run_id={run_id}: {e}")
+        return {"run_id": run_id, "events": [], "error": str(e)}

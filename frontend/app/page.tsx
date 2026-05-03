@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react"; // Import React
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import AgentControlCenter from "@/components/chat/AgentControlCenter";
 import AlertTicker from "@/components/AlertTicker";
@@ -35,6 +35,7 @@ type FeedStatus = {
   active_skus?: number;
   latest_snapshot_rows?: number;
   latest_run?: { run_id: string; timestamp: string; skus_fetched: number; rows_written: number; status: string };
+  warning?: string;
   error?: string; // To capture backend errors
   error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
 };
@@ -58,8 +59,10 @@ type AgentEvent = {
 const GCP_AUTH_MISSING_ERROR_TYPE = "GCP_AUTH_MISSING";
 const BIGQUERY_TABLE_MISSING_ERROR_TYPE = "BIGQUERY_TABLE_MISSING";
 const SERPAPI_KEY_MISSING_ERROR_TYPE = "CONFIG_ERROR"; // Assuming SERPAPI_KEY missing falls under config error
+const SERPAPI_CONNECTIVITY_ERROR_TYPE = "SERPAPI_CONNECTIVITY_ERROR";
 
 export default function Home() {
+  const hasInitialized = useRef(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [source, setSource] = useState<string>("loading");
   const [timestamp, setTimestamp] = useState<string>("");
@@ -156,12 +159,29 @@ export default function Home() {
       setFeedStatus(prev => ({ ...prev, error: undefined, error_type: undefined })); // Clear previous errors
       setCurrentRunId(data.run_id || null); // Store the run ID if available
     } else {
-      // Handle cases where data.rows might be empty but no explicit error
+      // Fallback: load latest snapshot rows directly when overview is empty.
+      try {
+        const latestRes = await fetch("/api/feeds/prices/latest", { cache: "no-store" });
+        if (latestRes.ok) {
+          const latestRows = await latestRes.json();
+          if (Array.isArray(latestRows) && latestRows.length > 0) {
+            setRows(latestRows);
+            setSource("bigquery-snapshot");
+            setTimestamp(latestRows[0]?.snapshot_time || data.timestamp || "");
+            setAlerts([]);
+            setCurrentRunId(data.run_id || null);
+            return;
+          }
+        }
+      } catch (_e) {
+        // Keep normal empty-state behavior below if fallback fails.
+      }
+
       setSource(data.source || "unknown");
       setTimestamp(data.timestamp || "");
       setAlerts([]);
       setRows([]);
-      setCurrentRunId(data.run_id || null); // Store the run ID if available
+      setCurrentRunId(data.run_id || null);
     }
   }, [query, stockFilter, fetchSize]);
 
@@ -204,26 +224,35 @@ export default function Home() {
       return;
     }
 
-    setFeedStatus(data);
+    const normalizedStatus = data.status === "no_runs" ? "ok" : data.status;
+    setFeedStatus({ ...data, status: normalizedStatus });
   }, [source]);
 
-  const fetchAgentEvents = useCallback(async (runId: string | null) => {
-    if (!runId) {
-      setAgentEvents([]); // Clear events if no run ID
-      return;
-    }
+  const fetchAgentEvents = useCallback(async (_runId: string | null) => {
     try {
-      const res = await fetch(`/api/agent/events?run_id=${runId}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Failed to fetch events: ${res.status}`);
-      const data = await res.json();
-      if (data.events) {
-        setAgentEvents(data.events);
+      if (_runId) {
+        const eventsRes = await fetch(`/api/agent/events?run_id=${encodeURIComponent(_runId)}`, { cache: "no-store" });
+        if (eventsRes.ok) {
+          const eventsData = await eventsRes.json();
+          if (Array.isArray(eventsData.events) && eventsData.events.length > 0) {
+            setAgentEvents(eventsData.events);
+            return;
+          }
+        }
+      }
+
+      const statusRes = await fetch(`/api/agent/status`, { cache: "no-store" });
+      if (!statusRes.ok) throw new Error(`Failed to fetch events: ${statusRes.status}`);
+      const statusData = await statusRes.json();
+      if (Array.isArray(statusData.events)) {
+        setAgentEvents(statusData.events);
+        if (statusData.active_run?.run_id) setCurrentRunId(statusData.active_run.run_id);
       } else {
         setAgentEvents([]);
       }
     } catch (e) {
       console.error("Failed to fetch agent events:", e);
-      setAgentEvents([]); // Clear events on error
+      // Keep existing events if fetch fails to avoid UI flicker to idle.
     }
   }, []);
 
@@ -274,14 +303,42 @@ export default function Home() {
     }
   }, [loadOverview, loadFeedStatus, fetchAgentEvents, refreshing, fetchSize]);
 
-  useEffect(() => {
-    // Initial load
-    refreshData();
+  const triggerAction = useCallback(async (actionType: string, payload: any) => {
+    try {
+      const res = await fetch("/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action_type: actionType,
+          payload,
+          user_id: "ui-user",
+          user_role: "admin",
+        }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `Action failed: ${res.status}`);
+      }
+      const data = await res.json();
+      setActionMsg(data?.message || `${actionType} queued successfully.`);
+    } catch (e: any) {
+      setActionMsg(`Action error (${actionType}): ${e?.message || "unknown error"}`);
+    }
+  }, []);
 
-    // Auto-refresh interval
+  useEffect(() => {
+    // Initial data fetch should not depend on a refresh run finishing.
+    if (!hasInitialized.current) {
+      hasInitialized.current = true;
+      loadOverview();
+      loadFeedStatus();
+      fetchAgentEvents(null);
+      refreshData();
+    }
+
     const id = setInterval(refreshData, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
     return () => clearInterval(id);
-  }, [autoRefreshMins, autoRefreshOn, refreshData]);
+  }, [autoRefreshMins, autoRefreshOn, refreshData, loadOverview, loadFeedStatus, fetchAgentEvents]);
 
   // Fetch events periodically if a run is active
   useEffect(() => {
@@ -315,12 +372,13 @@ export default function Home() {
   }, [page, totalPages]);
 
   // Button text for refresh
-  const refreshButtonText = refreshing ? "Fetching..." : "Refresh Now";
+  const refreshButtonText = refreshing ? "Scanning..." : "Run External Scan";
 
   // Determine if there's a critical error preventing data display
   const isSystemError = feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE ||
                         feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE ||
                         feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE ||
+                        feedStatus.error_type === SERPAPI_CONNECTIVITY_ERROR_TYPE ||
                         source === "❌ Auth Missing" || source === "Error";
 
   // Extract summary info from agent events
@@ -383,8 +441,8 @@ export default function Home() {
         <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : source.includes("Auth Missing") ? "text-red-400 font-semibold" : source.includes("Error") ? "text-red-400 font-semibold" : "text-amber-300 font-semibold"}>{source}</span></span>
         <span className="flex items-center gap-3">
           <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
-          <span className={`px-2 py-0.5 rounded ${feedStatus.status === "ok" ? "bg-emerald-900 text-emerald-300" : feedStatus.status === "loading" ? "bg-gray-700 text-gray-300" : "bg-red-900 text-red-300"}`}>
-            {feedStatus.status === "loading" ? "Loading..." : feedStatus.status === "ok" ? "Connected" : "Error"}
+          <span className={`px-2 py-0.5 rounded ${feedStatus.status === "ok" ? "bg-emerald-900 text-emerald-300" : feedStatus.status === "stale" ? "bg-amber-900 text-amber-300" : feedStatus.status === "loading" ? "bg-gray-700 text-gray-300" : "bg-red-900 text-red-300"}`}>
+            {feedStatus.status === "loading" ? "Loading..." : feedStatus.status === "ok" ? "Connected" : feedStatus.status === "stale" ? "No New Data" : "Error"}
           </span>
         </span>
       </div>
@@ -400,19 +458,34 @@ export default function Home() {
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[11px] text-slate-200">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold">Agents in Action</h4>
-              <span className="text-xs text-slate-400">ADF-style live execution monitor for SKU pricing intelligence</span>
+              <span className="text-xs text-slate-400">Live execution monitor for SKU pricing intelligence</span>
             </div>
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-semibold">Pipeline Stages</h4>
-              <button onClick={refreshData} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Fetching..." : "Refresh Now"}</button>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] text-slate-400">Target</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={1000}
+                  step={10}
+                  value={fetchSize}
+                  onChange={(e) => setFetchSize(Math.max(10, Math.min(1000, Number(e.target.value) || 10)))}
+                  disabled={refreshing || isSystemError}
+                  className="w-20 bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"
+                  title="External scan target"
+                />
+                <button onClick={refreshData} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshButtonText}</button>
+              </div>
             </div>
-            {/* Pipeline Stages Bar */}
-            <div className="flex justify-between items-center mb-3 text-xs font-medium">
-              {['SENSING', 'FETCHING', 'ENRICHING', 'PROCESSING', 'ANALYZING', 'UPDATING', 'RESPONDING'].map((stage, index, arr) => {
-                const stageStatus = agentEvents.find(e => e.stage === stage)?.status || 'pending';
+            {/* Pipeline Stages Grid (3 rows for better readability) */}
+            <div className="grid grid-cols-3 gap-2 mb-3 text-xs font-medium">
+              {['SENSING', 'FETCHING', 'ENRICHING', 'PROCESSING', 'ANALYZING', 'UPDATING', 'RESPONDING'].map((stage) => {
+                const stageEvent = agentEvents.find(e => e.stage === stage);
+                const stageStatus = stageEvent?.status || 'pending';
                 const isCurrent = latestEvent?.stage === stage;
-                const isCompleted = agentEvents.some(e => e.stage === stage && e.status === 'SUCCESS');
-                const isError = agentEvents.some(e => e.stage === stage && e.status === 'ERROR');
+                const isCompleted = stageStatus === 'SUCCESS';
+                const isError = stageStatus === 'ERROR' || stageStatus === 'FAILED';
 
                 let bgColor = 'bg-gray-700'; // Pending
                 if (isError) bgColor = 'bg-red-600';
@@ -420,12 +493,13 @@ export default function Home() {
                 else if (isCompleted) bgColor = 'bg-green-500';
 
                 return (
-                  <React.Fragment key={stage}>
-                    <div className={`px-2 py-1 rounded-md ${bgColor} text-white flex-1 text-center mx-0.5`}>
-                      {stage.substring(0, 3)} {/* Abbreviate stage */}
+                  <div key={stage} className={`px-2 py-1 rounded-md ${bgColor} text-white text-center`}>
+                    <div className="text-[10px] opacity-90 flex items-center justify-center gap-1">
+                      <span>{isError ? "✕" : isCompleted ? "✓" : isCurrent ? "●" : "○"}</span>
+                      <span>{stage.substring(0, 3)}</span>
                     </div>
-                    {index < arr.length - 1 && <div className="w-2 h-1 bg-gray-600 mx-0.5"></div>}
-                  </React.Fragment>
+                    <div className="text-[9px] text-slate-100/90">{String(stageStatus).toLowerCase()}</div>
+                  </div>
                 );
               })}
             </div>
@@ -480,8 +554,19 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Backend Detail */}
+            <div className="mb-2">
+              <h5 className="font-semibold text-slate-300 mb-1">Backend Detail</h5>
+              <div className="bg-slate-800 rounded p-2 text-[10px] text-slate-300">
+                <div>Run ID: <span className="text-slate-100">{progressSummary.run_id || "--"}</span></div>
+                <div>Status: <span className="text-slate-100">{progressSummary.current_status || "--"}</span></div>
+                <div>Message: <span className="text-slate-100">{progressSummary.current_message || "--"}</span></div>
+                {progressSummary.error_type && <div>Error: <span className="text-red-300">{progressSummary.error_type}</span></div>}
+              </div>
+            </div>
+
             {/* Live Event Log */}
-            <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+            <div className="max-h-56 overflow-y-auto space-y-1 pr-1 rounded border border-slate-800 p-1">
               {agentEvents.length === 0 ? <div className="text-slate-500">No agent events yet.</div> : agentEvents.map((e, i) => (
                 <div key={i} className="bg-slate-800 rounded p-1">
                   <span className="text-emerald-300">{new Date(e.timestamp).toLocaleTimeString()}</span> [{e.stage}] [{e.status}] {e.message}

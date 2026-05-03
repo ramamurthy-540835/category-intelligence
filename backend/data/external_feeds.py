@@ -1,6 +1,7 @@
 import os
 import asyncio
 import aiohttp
+import socket
 import re
 import datetime
 import uuid
@@ -30,6 +31,10 @@ class EventStage:
     ERROR = "ERROR"
 
 class CompetitorPriceFeed:
+    # Shared in-memory state for status endpoints
+    run_events: List[Dict[str, Any]] = []
+    current_run_id: Optional[str] = None
+    run_start_time: Optional[str] = None
     SERPAPI_URL = "https://serpapi.com/search.json"
     COMPETITOR_NAME = "Google Shopping"
     # Use the dataset from the environment variable
@@ -56,7 +61,7 @@ class CompetitorPriceFeed:
             "SKU_MASTER_TABLE",
             f"{self.PROJECT}.{self.DATASET}.sku_master"
         )
-        self.run_events = [] # In-memory storage for events during a single run
+        self.run_events = [] # Instance view for current run
         self.current_run_id = None
         self.run_start_time = None
 
@@ -84,6 +89,9 @@ class CompetitorPriceFeed:
             **details
         }
         self.run_events.append(event)
+        CompetitorPriceFeed.run_events.append(event)
+        CompetitorPriceFeed.current_run_id = self.current_run_id
+        CompetitorPriceFeed.run_start_time = self.run_start_time
         log.info(f"FEED_EVENT: {event}")
 
         # Attempt to log to BigQuery, but only if the client is available and the table exists
@@ -118,53 +126,70 @@ class CompetitorPriceFeed:
 
     async def fetch_price(self, session: aiohttp.ClientSession, sku: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Fetches live price for a single SKU using SerpApi."""
-        params = {
-            "engine": "google_shopping",
-            "api_key": SERPAPI_KEY,
-            "q": f"{sku.get('sku_name', sku.get('sku_id'))}", # Query for the SKU name or ID
-            "hl": "en",
-            "gl": "us",
-            "device": "desktop",
-        }
+        sku_id = str(sku.get("sku_id") or "").strip()
+        sku_name = str(sku.get("sku_name") or "").strip()
+
+        # Build multiple query candidates because raw SKU IDs like "LG-C3-77"
+        # often return no Shopping results.
+        base = sku_name or sku_id
+        normalized_id = re.sub(r"[-_]+", " ", sku_id)
+        model_only = re.sub(r"[^A-Za-z0-9 ]+", " ", normalized_id).strip()
+        query_candidates = [q for q in [base, f"{base} price", model_only, f"{model_only} tv", f"{model_only} soundbar"] if q]
+
         try:
-            async with session.get(self.SERPAPI_URL, params=params) as response:
-                response.raise_for_status()
-                data = await response.json()
+            product = None
+            for query in query_candidates[:4]:
+                params = {
+                    "engine": "google_shopping",
+                    "api_key": SERPAPI_KEY,
+                    "q": query,
+                    "hl": "en",
+                    "gl": "us",
+                    "device": "desktop",
+                }
+                async with session.get(self.SERPAPI_URL, params=params) as response:
+                    response.raise_for_status()
+                    data = await response.json()
 
                 if "error" in data:
-                    log.error(f"SerpApi error for SKU {sku.get('sku_id')}: {data['error']}")
-                    self._log_event(EventStage.ENRICHING, "ERROR", f"SerpApi error for SKU {sku.get('sku_id')}: {data['error']}", {"error_type": "SERPAPI_ERROR", "fix": "Check SERPAPI_KEY and query."})
+                    log.error(f"SerpApi error for SKU {sku_id}: {data['error']}")
+                    self._log_event(EventStage.ENRICHING, "ERROR", f"SerpApi error for SKU {sku_id}: {data['error']}", {"error_type": "SERPAPI_ERROR", "fix": "Check SERPAPI_KEY and query."})
                     return None
 
                 products = data.get("products", [])
-                if not products:
-                    self._log_event(EventStage.ENRICHING, "WARNING", f"No products found for SKU {sku.get('sku_id')}")
-                    return None
+                if products:
+                    product = products[0]
+                    break
 
-                # Find the most relevant product (e.g., first one)
-                product = products[0]
-                price_str = product.get('price')
-                competitor_price = 0.0
-                if price_str:
-                    cleaned_price_str = re.sub(r'[^\d.]', '', price_str)
-                    try:
-                        competitor_price = float(cleaned_price_str)
-                    except ValueError:
-                        log.warning(f"Could not parse price '{price_str}' for SKU {sku.get('sku_id')}")
+            if not product:
+                self._log_event(EventStage.ENRICHING, "WARNING", f"No products found for SKU {sku_id}")
+                return None
 
-                return {
-                    "sku_id": sku.get("sku_id"),
-                    "sku_name": sku.get("sku_name"),
-                    "competitor_price": competitor_price,
-                    "competitor_name": product.get("source", self.COMPETITOR_NAME),
-                    "product_url": product.get("link"),
-                    "image_url": product.get("thumbnail", product.get("image")),
-                    "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
-                    "last_checked": datetime.datetime.now().isoformat()
-                }
+            price_str = product.get('price')
+            competitor_price = 0.0
+            if price_str:
+                cleaned_price_str = re.sub(r'[^\d.]', '', price_str)
+                try:
+                    competitor_price = float(cleaned_price_str)
+                except ValueError:
+                    log.warning(f"Could not parse price '{price_str}' for SKU {sku_id}")
+
+            return {
+                "sku_id": sku.get("sku_id"),
+                "sku_name": sku.get("sku_name"),
+                "competitor_price": competitor_price,
+                "competitor_name": product.get("source", self.COMPETITOR_NAME),
+                "product_url": product.get("link"),
+                "image_url": product.get("thumbnail", product.get("image")),
+                "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
+                "last_checked": datetime.datetime.now().isoformat()
+            }
         except aiohttp.ClientError as e:
             log.error(f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}")
-            self._log_event(EventStage.ENRICHING, "ERROR", f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}", {"error_type": "HTTP_ERROR", "fix": "Check network connectivity and SERP API endpoint."})
+            err_msg = str(e)
+            error_type = "SERPAPI_CONNECTIVITY_ERROR" if ("Name or service not known" in err_msg or "Temporary failure in name resolution" in err_msg or "Cannot connect" in err_msg) else "HTTP_ERROR"
+            fix = "Check DNS/network egress to serpapi.com from backend host." if error_type == "SERPAPI_CONNECTIVITY_ERROR" else "Check network connectivity and SERP API endpoint."
+            self._log_event(EventStage.ENRICHING, "ERROR", f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}", {"error_type": error_type, "fix": fix})
             return None
         except Exception as e:
             log.error(f"Unexpected error fetching price for SKU {sku.get('sku_id')}: {e}")
@@ -303,6 +328,9 @@ class CompetitorPriceFeed:
         self.run_events = [] # Clear events for a new run
         self.current_run_id = str(uuid.uuid4()) # Generate a new run ID for this execution
         self.run_start_time = datetime.datetime.now().isoformat()
+        CompetitorPriceFeed.run_events = []
+        CompetitorPriceFeed.current_run_id = self.current_run_id
+        CompetitorPriceFeed.run_start_time = self.run_start_time
         self._log_event(EventStage.SENSING, "RUNNING", f"Refresh requested for {limit} SKUs", {"requested_limit": limit})
 
         try:
@@ -319,6 +347,10 @@ class CompetitorPriceFeed:
                 raise RuntimeError("SKU_MASTER_TABLE not set.")
             if not SERPAPI_KEY:
                 raise ValueError("SERPAPI_KEY environment variable not set.")
+            try:
+                socket.gethostbyname("serpapi.com")
+            except Exception as dns_err:
+                raise RuntimeError(f"SERPAPI_CONNECTIVITY_ERROR: DNS resolution failed for serpapi.com: {dns_err}")
 
             self._log_event(EventStage.FETCHING, "RUNNING", f"Validating environment configuration.")
             
@@ -349,8 +381,10 @@ class CompetitorPriceFeed:
 
         except RuntimeError as e:
             log.error(f"Feed run failed due to runtime error: {e}")
-            error_type = "GCP_AUTH_MISSING" if "GCP_AUTH_MISSING" in str(e) else "CONFIG_ERROR" if "not set" in str(e) else "BIGQUERY_TABLE_MISSING" if "BIGQUERY_TABLE_MISSING" in str(e) else "RUNTIME_ERROR"
-            self._log_event(EventStage.ERROR, "FAILED", f"Feed run failed: {e}", {"error_type": error_type, "fix": "Check .env.local and GCP credentials."})
+            msg = str(e)
+            error_type = "GCP_AUTH_MISSING" if "GCP_AUTH_MISSING" in msg else "SERPAPI_CONNECTIVITY_ERROR" if "SERPAPI_CONNECTIVITY_ERROR" in msg else "CONFIG_ERROR" if "not set" in msg else "BIGQUERY_TABLE_MISSING" if "BIGQUERY_TABLE_MISSING" in msg else "RUNTIME_ERROR"
+            fix = "Check DNS/network egress to serpapi.com from backend host." if error_type == "SERPAPI_CONNECTIVITY_ERROR" else "Check .env.local and GCP credentials."
+            self._log_event(EventStage.ERROR, "FAILED", f"Feed run failed: {e}", {"error_type": error_type, "fix": fix})
             return {"status": "error", "message": str(e), "error_type": error_type, "run_id": self.current_run_id, "timestamp": self.run_start_time}
         except ValueError as e: # SERPAPI_KEY missing
             log.error(f"Feed run failed due to configuration error: {e}")
