@@ -37,12 +37,13 @@ class CompetitorPriceFeed:
     DATASET = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
     TABLE_NAME = "competitor_price_snapshots"
     RUNS_TABLE_NAME = "competitor_price_feed_runs"
+    EVENT_LOG_TABLE_NAME = "feed_run_events" # New table for events
     # Construct full table IDs using the DATASET variable
     FULL_TABLE_ID = f"{PROJECT}.{DATASET}.{TABLE_NAME}"
     FULL_RUNS_TABLE_ID = f"{PROJECT}.{DATASET}.{RUNS_TABLE_NAME}"
+    FULL_EVENT_LOG_TABLE_ID = f"{PROJECT}.{DATASET}.{EVENT_LOG_TABLE_NAME}"
 
     def __init__(self):
-        # Initial validation happens here, but more detailed checks are in `run`
         if not SERPAPI_KEY:
             log.warning("SERPAPI_KEY environment variable not set. External price fetching will fail.")
         
@@ -84,18 +85,20 @@ class CompetitorPriceFeed:
         self.run_events.append(event)
         log.info(f"FEED_EVENT: {event}")
 
-        # Optionally, write to BigQuery if the table exists
+        # Attempt to log to BigQuery, but don't fail if it's not available or table is missing
         try:
             if self.bq_client._client: # Check if client is initialized
-                # Ensure the event table exists before attempting to insert
-                event_table_id = f"{self.PROJECT}.{self.DATASET}.feed_run_events"
                 try:
-                    self.bq_client._client.get_table(event_table_id)
-                    self.bq_client._client.insert_rows_json(event_table_id, [event])
+                    # Check if the event log table exists
+                    self.bq_client._client.get_table(self.FULL_EVENT_LOG_TABLE_ID)
+                    self.bq_client._client.insert_rows_json(self.FULL_EVENT_LOG_TABLE_ID, [event])
                 except Exception as table_err:
-                    log.warning(f"Could not log event to BigQuery table {event_table_id}: {table_err}")
+                    # Log a warning if the table is missing or inaccessible
+                    log.warning(f"Could not log event to BigQuery table {self.FULL_EVENT_LOG_TABLE_ID}: {table_err}")
+            else:
+                log.warning("BigQuery client not available, skipping event logging to BigQuery.")
         except Exception as e:
-            log.warning(f"Could not log event to BigQuery: {e}")
+            log.warning(f"An unexpected error occurred during BigQuery event logging: {e}")
 
     async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Fetches SKUs from BigQuery that are marked for tracking."""
