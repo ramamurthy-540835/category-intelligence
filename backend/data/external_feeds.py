@@ -62,7 +62,7 @@ class CompetitorPriceFeed:
 
     def _log_event(self, stage: str, status: str, message: str, details: Dict[str, Any] = None):
         """Logs a structured event for the current run."""
-        details = details or {} # Ensure details is always a dict
+        details = details or {} # Ensure details is always a dict, even if empty
         if not self.current_run_id:
             self.current_run_id = str(uuid.uuid4()) # Start a new run if none exists
             self.run_start_time = datetime.datetime.now().isoformat()
