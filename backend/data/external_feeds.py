@@ -86,14 +86,14 @@ class CompetitorPriceFeed:
         self.run_events.append(event)
         log.info(f"FEED_EVENT: {event}")
 
-        # Attempt to log to BigQuery, but don't fail if it's not available or table is missing
+        # Attempt to log to BigQuery, but only if the client is available and the table exists
         if self.bq_client and self.bq_client._client: # Check if client is initialized and available
             try:
-                # Check if the event log table exists
+                # Check if the event log table exists before attempting to insert
                 self.bq_client._client.get_table(self.FULL_EVENT_LOG_TABLE_ID)
                 self.bq_client._client.insert_rows_json(self.FULL_EVENT_LOG_TABLE_ID, [event])
             except Exception as table_err:
-                # Log a warning if the table is missing or inaccessible
+                # Log a warning if the table is missing or inaccessible, but don't fail the main process
                 log.warning(f"Could not log event to BigQuery table {self.FULL_EVENT_LOG_TABLE_ID}: {table_err}")
         else:
             log.warning("BigQuery client not available or not initialized, skipping event logging to BigQuery.")
@@ -248,13 +248,19 @@ class CompetitorPriceFeed:
 
         try:
             # Use the bq_client instance from BigQueryClient
-            errors = self.bq_client._client.insert_rows_json(self.FULL_TABLE_ID, rows)
-            if errors:
-                log.error("BigQuery insert errors: %s", errors)
-                self._log_event(EventStage.UPDATING, "ERROR", f"BigQuery insert errors: {errors}", {"error_type": "BIGQUERY_INSERT_ERROR", "fix": f"Check schema for {self.FULL_TABLE_ID} and data types."})
+            # Only attempt insert if the client is valid
+            if self.bq_client and self.bq_client._client:
+                errors = self.bq_client._client.insert_rows_json(self.FULL_TABLE_ID, rows)
+                if errors:
+                    log.error("BigQuery insert errors: %s", errors)
+                    self._log_event(EventStage.UPDATING, "ERROR", f"BigQuery insert errors: {errors}", {"error_type": "BIGQUERY_INSERT_ERROR", "fix": f"Check schema for {self.FULL_TABLE_ID} and data types."})
+                    return 0
+                log.info(f"Successfully inserted {len(rows)} rows into {self.FULL_TABLE_ID}")
+                return len(rows)
+            else:
+                log.warning("BigQuery client not available, skipping insert_rows_json.")
+                self._log_event(EventStage.UPDATING, "ERROR", "BigQuery client not available, skipping insert.", {"error_type": "BIGQUERY_CLIENT_UNAVAILABLE"})
                 return 0
-            log.info(f"Successfully inserted {len(rows)} rows into {self.FULL_TABLE_ID}")
-            return len(rows)
         except Exception as e:
             log.error(f"Error writing to BigQuery table {self.FULL_TABLE_ID}: {e}")
             self._log_event(EventStage.UPDATING, "ERROR", f"Error writing to BigQuery table {self.FULL_TABLE_ID}: {e}", {"error_type": "BIGQUERY_WRITE_ERROR", "fix": f"Check permissions and table schema for {self.FULL_TABLE_ID}."})
@@ -278,12 +284,16 @@ class CompetitorPriceFeed:
         }
         try:
             # Use the bq_client instance from BigQueryClient
-            errors = self.bq_client._client.insert_rows_json(self.FULL_RUNS_TABLE_ID, [metadata])
-            if errors:
-                log.error("BigQuery run metadata insert errors: %s", errors)
-                self._log_event(EventStage.UPDATING, "ERROR", f"BigQuery run metadata insert errors: {errors}", {"error_type": "BIGQUERY_INSERT_ERROR", "fix": f"Check schema for {self.FULL_RUNS_TABLE_ID}."})
+            if self.bq_client and self.bq_client._client: # Check if client is initialized and available
+                errors = self.bq_client._client.insert_rows_json(self.FULL_RUNS_TABLE_ID, [metadata])
+                if errors:
+                    log.error("BigQuery run metadata insert errors: %s", errors)
+                    self._log_event(EventStage.UPDATING, "ERROR", f"BigQuery run metadata insert errors: {errors}", {"error_type": "BIGQUERY_INSERT_ERROR", "fix": f"Check schema for {self.FULL_RUNS_TABLE_ID}."})
+                else:
+                    log.info(f"Successfully inserted run metadata into {self.FULL_RUNS_TABLE_ID}")
             else:
-                log.info(f"Successfully inserted run metadata into {self.FULL_RUNS_TABLE_ID}")
+                log.warning("BigQuery client not available, skipping run metadata logging to BigQuery.")
+                self._log_event(EventStage.UPDATING, "ERROR", "BigQuery client not available, skipping run metadata logging.", {"error_type": "BIGQUERY_CLIENT_UNAVAILABLE"})
         except Exception as e:
             log.error(f"Error writing run metadata to BigQuery table {self.FULL_RUNS_TABLE_ID}: {e}")
             self._log_event(EventStage.ERROR, "ERROR", f"Failed to write run metadata: {e}", {"error_type": "BIGQUERY_WRITE_ERROR", "fix": f"Check permissions and table schema for {self.FULL_RUNS_TABLE_ID}."})
@@ -313,9 +323,9 @@ class CompetitorPriceFeed:
             self._log_event(EventStage.FETCHING, "RUNNING", f"Validating environment configuration.")
             
             # Check BigQuery tables existence
-            snapshots_table_exists = self.bq_client._client.get_table(self.FULL_TABLE_ID) if self.bq_client._client else False
-            runs_table_exists = self.bq_client._client.get_table(self.FULL_RUNS_TABLE_ID) if self.bq_client._client else False
-            sku_master_exists = self.bq_client._client.get_table(sku_master_table) if self.bq_client._client else False
+            snapshots_table_exists = self.bq_client._client.get_table(self.FULL_TABLE_ID) if self.bq_client and self.bq_client._client else False
+            runs_table_exists = self.bq_client._client.get_table(self.FULL_RUNS_TABLE_ID) if self.bq_client and self.bq_client._client else False
+            sku_master_exists = self.bq_client._client.get_table(sku_master_table) if self.bq_client and self.bq_client._client else False
 
             if not snapshots_table_exists:
                 raise RuntimeError(f"BIGQUERY_TABLE_MISSING: Table {self.FULL_TABLE_ID} not found.")
