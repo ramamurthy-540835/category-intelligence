@@ -3,7 +3,8 @@ from fastapi import HTTPException
 ROLE_PERMISSIONS = {
     'viewer': {'read_kpis'},
     'analyst': {'read_kpis', 'run_diagnosis', 'run_simulation'},
-    'manager': {'read_kpis', 'run_diagnosis', 'run_simulation', 'trigger_action', 'export', 'manage_campaigns'}
+    'manager': {'read_kpis', 'run_diagnosis', 'run_simulation', 'trigger_action', 'export', 'manage_campaigns'},
+    'admin': {'read_kpis', 'run_diagnosis', 'run_simulation', 'trigger_action', 'export', 'manage_campaigns'}
 }
 
 def has_permission(role: str, permission: str) -> bool:

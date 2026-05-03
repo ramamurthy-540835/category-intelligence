@@ -47,6 +47,18 @@ class CompetitorPriceFeed:
     FULL_TABLE_ID = f"{PROJECT}.{DATASET}.{TABLE_NAME}"
     FULL_RUNS_TABLE_ID = f"{PROJECT}.{DATASET}.{RUNS_TABLE_NAME}"
     FULL_EVENT_LOG_TABLE_ID = f"{PROJECT}.{DATASET}.{EVENT_LOG_TABLE_NAME}"
+    EXPANSION_SEED_QUERIES = [
+        "Sony OLED TV 65 inch",
+        "Samsung QLED TV 55 inch",
+        "LG OLED TV 77 inch",
+        "TCL mini LED TV 75 inch",
+        "Hisense ULED TV 65 inch",
+        "Vizio soundbar",
+        "Samsung soundbar",
+        "Sonos soundbar",
+        "Bose soundbar",
+        "Chromecast streaming device",
+    ]
 
     def __init__(self):
         if not SERPAPI_KEY:
@@ -109,8 +121,20 @@ class CompetitorPriceFeed:
     async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Fetches SKUs from BigQuery that are marked for tracking."""
         self._log_event(EventStage.FETCHING, "RUNNING", f"Loading active SKUs from {self.sku_master_table_id} with limit {limit}", {"requested_limit": limit})
+        price_expr = "0.0"
+        try:
+            if self.bq_client and self.bq_client._client:
+                table = self.bq_client._client.get_table(self.sku_master_table_id)
+                field_names = {f.name.lower() for f in table.schema}
+                for candidate in ["retailer_price", "our_price", "price", "current_price"]:
+                    if candidate in field_names:
+                        price_expr = f"CAST(COALESCE({candidate}, 0) AS FLOAT64)"
+                        break
+        except Exception:
+            # Keep default 0.0 when schema introspection fails.
+            pass
         sql = f"""
-            SELECT sku_id, sku_name, COALESCE(active_flag, TRUE) as is_active
+            SELECT sku_id, sku_name, {price_expr} AS retailer_price, COALESCE(active_flag, TRUE) as is_active
             FROM `{self.sku_master_table_id}`
             WHERE COALESCE(active_flag, TRUE) = TRUE
             LIMIT @limit
@@ -129,15 +153,37 @@ class CompetitorPriceFeed:
         sku_id = str(sku.get("sku_id") or "").strip()
         sku_name = str(sku.get("sku_name") or "").strip()
 
-        # Build multiple query candidates because raw SKU IDs like "LG-C3-77"
-        # often return no Shopping results.
-        base = sku_name or sku_id
-        normalized_id = re.sub(r"[-_]+", " ", sku_id)
-        model_only = re.sub(r"[^A-Za-z0-9 ]+", " ", normalized_id).strip()
-        query_candidates = [q for q in [base, f"{base} price", model_only, f"{model_only} tv", f"{model_only} soundbar"] if q]
+        # Build production-grade query candidates.
+        # Prefer descriptive SKU names from master data and use SKU id only as fallback.
+        normalized_name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]+", " ", sku_name)).strip()
+        normalized_id = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]+", " ", re.sub(r"[-_]+", " ", sku_id))).strip()
+        model_only = normalized_id
+
+        product_suffix = ""
+        name_lower = normalized_name.lower()
+        if "soundbar" in name_lower or "bar " in name_lower:
+            product_suffix = " soundbar"
+        elif "chromecast" in name_lower or "stream" in name_lower:
+            product_suffix = " streaming device"
+        elif any(token in name_lower for token in ["tv", "oled", "qled", "qned", "inch"]):
+            product_suffix = " tv"
+
+        query_candidates = []
+        for candidate in [
+            normalized_name,
+            f"{normalized_name} price" if normalized_name else "",
+            f"{normalized_name}{product_suffix}" if normalized_name else "",
+            model_only,
+            f"{model_only}{product_suffix}" if model_only else "",
+            f"{model_only} price" if model_only else "",
+        ]:
+            c = candidate.strip()
+            if c and c not in query_candidates:
+                query_candidates.append(c)
 
         try:
             product = None
+            used_query = None
             for query in query_candidates[:4]:
                 params = {
                     "engine": "google_shopping",
@@ -156,9 +202,12 @@ class CompetitorPriceFeed:
                     self._log_event(EventStage.ENRICHING, "ERROR", f"SerpApi error for SKU {sku_id}: {data['error']}", {"error_type": "SERPAPI_ERROR", "fix": "Check SERPAPI_KEY and query."})
                     return None
 
-                products = data.get("products", [])
-                if products:
+                # SerpApi payload shape varies by engine/account and can return either
+                # `products` or `shopping_results`.
+                products = data.get("products") or data.get("shopping_results") or []
+                if products and isinstance(products, list):
                     product = products[0]
+                    used_query = query
                     break
 
             if not product:
@@ -166,6 +215,8 @@ class CompetitorPriceFeed:
                 return None
 
             price_str = product.get('price')
+            if not price_str and isinstance(product.get("extracted_price"), (int, float)):
+                price_str = str(product.get("extracted_price"))
             competitor_price = 0.0
             if price_str:
                 cleaned_price_str = re.sub(r'[^\d.]', '', price_str)
@@ -177,8 +228,11 @@ class CompetitorPriceFeed:
             return {
                 "sku_id": sku.get("sku_id"),
                 "sku_name": sku.get("sku_name"),
+                "retailer_price": float(sku.get("retailer_price") or 0.0),
                 "competitor_price": competitor_price,
+                "price_gap_pct": 0.0,
                 "competitor_name": product.get("source", self.COMPETITOR_NAME),
+                "search_query_used": used_query,
                 "product_url": product.get("link"),
                 "image_url": product.get("thumbnail", product.get("image")),
                 "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
@@ -200,6 +254,24 @@ class CompetitorPriceFeed:
         """Fetches live prices for multiple SKUs and returns a snapshot."""
         self._log_event(EventStage.FETCHING, "RUNNING", f"Starting live snapshot fetch with limit {limit}", {"requested_limit": limit})
         skus_to_track = await self.fetch_skus_to_track(limit=limit)
+        if len(skus_to_track) < limit:
+            needed = limit - len(skus_to_track)
+            expanded = []
+            for i in range(needed):
+                q = self.EXPANSION_SEED_QUERIES[i % len(self.EXPANSION_SEED_QUERIES)]
+                expanded.append({
+                    "sku_id": f"EXT-{i+1:04d}",
+                    "sku_name": q,
+                    "retailer_price": 0.0,
+                    "is_active": True,
+                })
+            skus_to_track.extend(expanded)
+            self._log_event(
+                EventStage.FETCHING,
+                "RUNNING",
+                f"Expanded scan with {needed} external query candidates to meet target {limit}.",
+                {"requested_limit": limit, "active_skus": len(skus_to_track)},
+            )
         if not skus_to_track:
             self._log_event(EventStage.FETCHING, "COMPLETE", "No SKUs to track.")
             return {"status": "no_skus_to_track", "rows": [], "timestamp": None}
@@ -217,7 +289,17 @@ class CompetitorPriceFeed:
         self._log_event(EventStage.ENRICHING, "SUCCESS", f"Retrieved market prices for {len(rows_to_write)} SKUs.", {"processed_rows": len(rows_to_write)})
 
         self._log_event(EventStage.PROCESSING, "RUNNING", "Normalizing market prices and SKU rows.")
-        # Placeholder for actual price gap calculation if needed here
+        for row in rows_to_write:
+            our_price = float(row.get("retailer_price") or 0.0)
+            competitor_price = float(row.get("competitor_price") or 0.0)
+            if our_price > 0:
+                row["price_gap_pct"] = ((our_price - competitor_price) / our_price) * 100.0
+            else:
+                row["price_gap_pct"] = 0.0
+        # Keep snapshot focused on real catalog rows with internal pricing.
+        # External expansion rows are useful for scan coverage but should not pollute
+        # dashboard with zero-valued internal prices.
+        rows_to_write = [r for r in rows_to_write if float(r.get("retailer_price") or 0.0) > 0]
         self._log_event(EventStage.PROCESSING, "SUCCESS", "Price normalization and row processing complete.")
 
         self._log_event(EventStage.ANALYZING, "RUNNING", "Calculating price gaps and priority alerts.")
@@ -257,31 +339,33 @@ class CompetitorPriceFeed:
         """Writes fetched price data to BigQuery."""
         if not rows:
             return 0
-        
-        # Add timestamp to each row for partitioning/clustering if applicable
-        for row in rows:
-            row["snapshot_time"] = timestamp
-            # Ensure all expected columns are present, even if None
-            row.setdefault("sku_id", None)
-            row.setdefault("sku_name", None)
-            row.setdefault("competitor_price", 0.0)
-            row.setdefault("competitor_name", None)
-            row.setdefault("product_url", None)
-            row.setdefault("image_url", None)
-            row.setdefault("in_stock", True) # Default to True if not provided by SerpApi
-            row.setdefault("last_checked", timestamp)
 
         try:
             # Use the bq_client instance from BigQueryClient
             # Only attempt insert if the client is valid
             if self.bq_client and self.bq_client._client:
-                errors = self.bq_client._client.insert_rows_json(self.FULL_TABLE_ID, rows)
+                table = self.bq_client._client.get_table(self.FULL_TABLE_ID)
+                allowed_fields = {f.name for f in table.schema}
+
+                normalized_rows = []
+                for row in rows:
+                    enriched = dict(row)
+                    enriched["snapshot_time"] = timestamp
+                    enriched.setdefault("sku_id", None)
+                    enriched.setdefault("sku_name", None)
+                    enriched.setdefault("competitor_price", 0.0)
+                    enriched.setdefault("in_stock", True)
+
+                    filtered = {k: v for k, v in enriched.items() if k in allowed_fields}
+                    normalized_rows.append(filtered)
+
+                errors = self.bq_client._client.insert_rows_json(self.FULL_TABLE_ID, normalized_rows)
                 if errors:
                     log.error("BigQuery insert errors: %s", errors)
                     self._log_event(EventStage.UPDATING, "ERROR", f"BigQuery insert errors: {errors}", {"error_type": "BIGQUERY_INSERT_ERROR", "fix": f"Check schema for {self.FULL_TABLE_ID} and data types."})
                     return 0
-                log.info(f"Successfully inserted {len(rows)} rows into {self.FULL_TABLE_ID}")
-                return len(rows)
+                log.info(f"Successfully inserted {len(normalized_rows)} rows into {self.FULL_TABLE_ID}")
+                return len(normalized_rows)
             else:
                 log.warning("BigQuery client not available, skipping insert_rows_json.")
                 self._log_event(EventStage.UPDATING, "ERROR", "BigQuery client not available, skipping insert.", {"error_type": "BIGQUERY_CLIENT_UNAVAILABLE"})

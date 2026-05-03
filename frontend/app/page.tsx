@@ -56,6 +56,15 @@ type AgentEvent = {
   fix?: string;
 };
 
+type ActionRecord = {
+  timestamp: string;
+  action: string;
+  sku_id: string;
+  sku_name: string;
+  status: string;
+  message: string;
+};
+
 const GCP_AUTH_MISSING_ERROR_TYPE = "GCP_AUTH_MISSING";
 const BIGQUERY_TABLE_MISSING_ERROR_TYPE = "BIGQUERY_TABLE_MISSING";
 const SERPAPI_KEY_MISSING_ERROR_TYPE = "CONFIG_ERROR"; // Assuming SERPAPI_KEY missing falls under config error
@@ -77,6 +86,8 @@ export default function Home() {
   const [feedStatus, setFeedStatus] = useState<FeedStatus>({ status: "loading" });
   const [refreshing, setRefreshing] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionHistory, setActionHistory] = useState<ActionRecord[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [autoRefreshMins, setAutoRefreshMins] = useState(1);
@@ -304,6 +315,8 @@ export default function Home() {
   }, [loadOverview, loadFeedStatus, fetchAgentEvents, refreshing, fetchSize]);
 
   const triggerAction = useCallback(async (actionType: string, payload: any) => {
+    setActionLoading(actionType);
+    setActionMsg(`Running ${actionType}...`);
     try {
       const res = await fetch("/api/action", {
         method: "POST",
@@ -315,14 +328,25 @@ export default function Home() {
           user_role: "admin",
         }),
       });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || `Action failed: ${res.status}`);
+      const raw = await res.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
       }
-      const data = await res.json();
-      setActionMsg(data?.message || `${actionType} queued successfully.`);
+      if (!res.ok) {
+        const backendMsg = data?.message || data?.detail || data?.error || raw;
+        throw new Error(backendMsg || `Action failed: ${res.status}`);
+      }
+      setActionMsg(data?.message || `${actionType} completed.`);
+      if (data?.action_record) {
+        setActionHistory((prev) => [data.action_record as ActionRecord, ...prev].slice(0, 10));
+      }
     } catch (e: any) {
       setActionMsg(`Action error (${actionType}): ${e?.message || "unknown error"}`);
+    } finally {
+      setActionLoading(null);
     }
   }, []);
 
@@ -401,6 +425,23 @@ export default function Home() {
     error_message: feedStatus.error || latestEvent?.message || null,
     fix: feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE ? `Table: ${feedStatus.error?.replace("BigQuery table not found: ", "")}` : latestEvent?.fix || null,
   };
+  const requestedNum = Number(progressSummary.requested || 0);
+  const activeNum = Number(progressSummary.active_skus || 0);
+  const externalAdded = Math.max(0, requestedNum - activeNum);
+  const enrichSuccessEvent = agentEvents.find((e) => e.stage === "ENRICHING" && e.status === "SUCCESS");
+  const matchedCount = enrichSuccessEvent ? Number((enrichSuccessEvent.message.match(/(\d+)/)?.[1] || 0)) : 0;
+  const latestErrorEvent = agentEvents.find((e) => e.status === "ERROR");
+  const compactError = latestErrorEvent?.message?.includes("BigQuery insert errors:")
+    ? `BigQuery schema mismatch during insert (${(latestErrorEvent.message.match(/'index':/g) || []).length} row errors).`
+    : latestErrorEvent?.message || null;
+
+  const feedErrorText = (feedStatus.error || "").toLowerCase();
+  const isBigQueryDown = feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE ||
+    (feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE && feedErrorText.includes("competitor_price_snapshots"));
+  const isSkuMasterDown = feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE &&
+    feedErrorText.includes("sku_master");
+  const isSerpApiDown = feedStatus.error_type === SERPAPI_CONNECTIVITY_ERROR_TYPE ||
+    (feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE && feedErrorText.includes("serpapi"));
 
   // Update agent status and steps based on backend events
   useEffect(() => {
@@ -531,15 +572,18 @@ export default function Home() {
                 <div className="font-semibold text-white">{agentEvents.filter(e => e.status === 'ERROR').length}</div>
               </div>
             </div>
+            <div className="mb-3 bg-slate-800 rounded p-2 text-[10px] text-slate-300">
+              <div className="font-semibold text-slate-200 mb-1">Run Summary</div>
+              <div>Requested: <span className="text-slate-100">{requestedNum}</span> | Base Active: <span className="text-slate-100">{activeNum}</span> | External Added: <span className="text-slate-100">{externalAdded}</span></div>
+              <div>SerpAPI Matched: <span className="text-slate-100">{matchedCount}</span> | Written to BigQuery: <span className="text-slate-100">{progressSummary.written_rows}</span></div>
+              {compactError && <div className="text-red-300 mt-1">Latest Error: {compactError}</div>}
+            </div>
 
             {/* External Connections */}
             <div className="mb-3">
               <h5 className="font-semibold text-slate-300 mb-1">External Connections</h5>
-              <div className="grid grid-cols-2 gap-1 text-[10px]">
-                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>BigQuery Dataset</div>
-                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>SKU Master Table</div>
-                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE ? 'bg-red-500' : 'bg-green-500'}`}></span>SERPAPI</div>
-                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${true ? 'bg-green-500' : 'bg-red-500'}`}></span>Vertex AI</div> {/* Assuming Vertex AI is always configured */}
+              <div className="grid grid-cols-1 gap-1 text-[10px]">
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${isSerpApiDown ? 'bg-red-500' : 'bg-green-500'}`}></span>SERPAPI External Scan</div>
               </div>
             </div>
 
@@ -562,6 +606,7 @@ export default function Home() {
                 <div>Status: <span className="text-slate-100">{progressSummary.current_status || "--"}</span></div>
                 <div>Message: <span className="text-slate-100">{progressSummary.current_message || "--"}</span></div>
                 {progressSummary.error_type && <div>Error: <span className="text-red-300">{progressSummary.error_type}</span></div>}
+                {compactError && <div>Latest Error Detail: <span className="text-red-300">{compactError}</span></div>}
               </div>
             </div>
 
@@ -606,11 +651,13 @@ export default function Home() {
                     <tbody className="text-slate-200">
                       {pagedRows.map((row) => {
                         const name = row.name || row.sku_name || row.sku_id;
-                        const our = row.our_price ?? row.retailer_price ?? 0;
+                        const our = Number(row.our_price ?? row.retailer_price ?? 0) || 0;
+                        const market = Number(row.competitor_price ?? 0) || 0;
+                        const gapPct = Number(row.price_gap_pct ?? 0) || 0;
                         return (
                           <tr key={row.sku_id} className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/60" onClick={() => setSelected(row)}>
-                            <td className="py-1">{name}</td><td className="py-1">${our.toFixed(2)}</td><td className="py-1">${row.competitor_price.toFixed(2)}</td>
-                            <td className={`py-1 font-semibold ${row.price_gap_pct >= 0 ? "text-amber-300" : "text-emerald-300"}`}>{row.price_gap_pct >= 0 ? "+" : ""}{row.price_gap_pct.toFixed(1)}%</td>
+                            <td className="py-1">{name}</td><td className="py-1">${our.toFixed(2)}</td><td className="py-1">${market.toFixed(2)}</td>
+                            <td className={`py-1 font-semibold ${gapPct >= 0 ? "text-amber-300" : "text-emerald-300"}`}>{gapPct >= 0 ? "+" : ""}{gapPct.toFixed(1)}%</td>
                             <td className="py-1">{row.in_stock ? "In" : "Out"}</td>
                           </tr>
                         );
@@ -628,14 +675,28 @@ export default function Home() {
           {selected && !isSystemError && (
             <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[12px] text-slate-200">
               <div className="flex items-center justify-between mb-2"><h4 className="font-semibold">SKU Detail: {selected.name || selected.sku_name || selected.sku_id}</h4><button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white">Close</button></div>
-              <div className="grid grid-cols-2 gap-2 mb-3"><div>SKU: {selected.sku_id}</div><div>Stock: {selected.in_stock ? "In Stock" : "Out"}</div><div>Gap: {selected.price_gap_pct.toFixed(2)}%</div><div>Snapshot: {selected.snapshot_time || "--"}</div></div>
+              <div className="grid grid-cols-2 gap-2 mb-3"><div>SKU: {selected.sku_id}</div><div>Stock: {selected.in_stock ? "In Stock" : "Out"}</div><div>Gap: {(Number(selected.price_gap_pct ?? 0) || 0).toFixed(2)}%</div><div>Snapshot: {selected.snapshot_time || "--"}</div></div>
               <div className="flex gap-2 flex-wrap">
-                <button onClick={() => triggerAction("reprice", selected)} className="px-2 py-1 rounded bg-blue-700 text-white">Reprice</button>
-                <button onClick={() => triggerAction("replenish", selected)} className="px-2 py-1 rounded bg-emerald-700 text-white">Replenish</button>
-                <button onClick={() => triggerAction("draft_coop_email", selected)} className="px-2 py-1 rounded bg-amber-700 text-white">Draft Co-op</button>
-                <button onClick={() => triggerAction("queue_campaign", selected)} className="px-2 py-1 rounded bg-purple-700 text-white">Queue Campaign</button>
+                <button disabled={!!actionLoading} onClick={() => triggerAction("reprice", selected)} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{actionLoading === "reprice" ? "Running..." : "Reprice"}</button>
+                <button disabled={!!actionLoading} onClick={() => triggerAction("replenish", selected)} className="px-2 py-1 rounded bg-emerald-700 text-white disabled:opacity-50">{actionLoading === "replenish" ? "Running..." : "Replenish"}</button>
+                <button disabled={!!actionLoading} onClick={() => triggerAction("draft_coop_email", selected)} className="px-2 py-1 rounded bg-amber-700 text-white disabled:opacity-50">{actionLoading === "draft_coop_email" ? "Running..." : "Draft Co-op"}</button>
+                <button disabled={!!actionLoading} onClick={() => triggerAction("queue_campaign", selected)} className="px-2 py-1 rounded bg-purple-700 text-white disabled:opacity-50">{actionLoading === "queue_campaign" ? "Running..." : "Queue Campaign"}</button>
               </div>
               {actionMsg && <div className="mt-2 text-[11px] text-slate-300 bg-slate-800 rounded p-2">{actionMsg}</div>}
+              <div className="mt-2 bg-slate-800 rounded p-2">
+                <div className="text-[11px] font-semibold text-slate-200 mb-1">Recent Actions</div>
+                {actionHistory.length === 0 ? (
+                  <div className="text-[11px] text-slate-400">No actions yet.</div>
+                ) : (
+                  <div className="space-y-1">
+                    {actionHistory.map((a, i) => (
+                      <div key={`${a.timestamp}-${i}`} className="text-[11px] text-slate-300">
+                        {new Date(a.timestamp).toLocaleTimeString()} · {a.action} · {a.sku_name} ({a.sku_id}) · {a.status}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           <div className="flex flex-1 h-full overflow-y-auto"><ChatInterface /></div>
