@@ -26,6 +26,7 @@ type OverviewPayload = {
   rows?: Row[];
   error?: string; // To capture backend errors
   error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
+  run_id?: string; // To capture the run ID for event fetching
 };
 
 type FeedStatus = {
@@ -37,9 +38,21 @@ type FeedStatus = {
   error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
 };
 
-type AgentEvent = { ts: string; phase: string; message: string };
+type AgentEvent = {
+  run_id: string;
+  timestamp: string;
+  stage: string;
+  status: string;
+  message: string;
+  requested_limit?: number;
+  processed_rows?: number;
+  total_skus?: number;
+  error_type?: string;
+};
 
 const GCP_AUTH_MISSING_ERROR_TYPE = "GCP_AUTH_MISSING";
+const BIGQUERY_TABLE_MISSING_ERROR_TYPE = "BIGQUERY_TABLE_MISSING";
+const SERPAPI_KEY_MISSING_ERROR_TYPE = "CONFIG_ERROR"; // Assuming SERPAPI_KEY missing falls under config error
 
 export default function Home() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -56,7 +69,8 @@ export default function Home() {
   const [feedStatus, setFeedStatus] = useState<FeedStatus>({ status: "loading" });
   const [refreshing, setRefreshing] = useState(false);
   const [actionMsg, setActionMsg] = useState("");
-  const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [autoRefreshMins, setAutoRefreshMins] = useState(1);
   const [autoRefreshOn, setAutoRefreshOn] = useState(true);
 
@@ -66,7 +80,22 @@ export default function Home() {
   const [agentError, setAgentError] = useState<string | null>(null);
 
   const logEvent = (phase: string, message: string) => {
-    setEvents((prev) => [{ ts: new Date().toLocaleTimeString(), phase, message }, ...prev].slice(0, 20));
+    // This is for frontend-side logging, not backend events
+    setAgentEvents((prev) => [{ timestamp: new Date().toISOString(), stage: phase, status: 'INFO', message: message }, ...prev].slice(0, 20));
+  };
+
+  const mapBackendStageToAgentStep = (stage: string): AgentStep => {
+    switch (stage) {
+      case 'SENSING': return 'thinking';
+      case 'FETCHING': return 'thinking';
+      case 'PROCESSING': return 'analyzing';
+      case 'ANALYZING': return 'analyzing';
+      case 'UPDATING': return 'acting';
+      case 'RESPONDING': return 'responding';
+      case 'COMPLETE': return 'done';
+      case 'ERROR': return 'error';
+      default: return 'idle';
+    }
   };
 
   const loadOverview = useCallback(async () => {
@@ -80,6 +109,7 @@ export default function Home() {
       setRows([]);
       setTimestamp("");
       setFeedStatus({ status: "error", error: data.message, error_type: data.error_type });
+      setCurrentRunId(null); // Clear run ID on auth error
       return;
     }
 
@@ -88,7 +118,8 @@ export default function Home() {
       setAlerts([{ priority: "P1", sku: "System", msg: `Error loading data: ${data.error}` }]);
       setRows([]);
       setTimestamp("");
-      setFeedStatus({ status: "error", error: data.error });
+      setFeedStatus({ status: "error", error: data.error, error_type: data.error_type });
+      setCurrentRunId(null); // Clear run ID on data error
       return;
     }
 
@@ -98,12 +129,14 @@ export default function Home() {
       setSource(data.source || "unknown");
       setTimestamp(data.timestamp || "");
       setFeedStatus(prev => ({ ...prev, error: undefined, error_type: undefined })); // Clear previous errors
+      setCurrentRunId(data.run_id || null); // Store the run ID if available
     } else {
       // Handle cases where data.rows might be empty but no explicit error
       setSource(data.source || "unknown");
       setTimestamp(data.timestamp || "");
       setAlerts([]);
       setRows([]);
+      setCurrentRunId(data.run_id || null); // Store the run ID if available
     }
   }, [query, stockFilter, fetchSize]);
 
@@ -113,7 +146,6 @@ export default function Home() {
 
     if (data.error_type === GCP_AUTH_MISSING_ERROR_TYPE) {
       setFeedStatus({ status: "error", error: data.message, error_type: data.error_type });
-      // If feed status fails due to auth, and overview hasn't already, update overview status
       if (source !== "❌ Auth Missing") {
         setSource("❌ Auth Missing");
         setAlerts([{ priority: "P1", sku: "System", msg: "GCP Authentication Missing. Please log in." }]);
@@ -122,8 +154,8 @@ export default function Home() {
     }
 
     if (data.status === "error") {
-      setFeedStatus({ status: "error", error: data.error });
-      if (source !== "Error") { // Avoid overwriting specific auth error message
+      setFeedStatus({ status: "error", error: data.error, error_type: data.error_type });
+      if (source !== "Error") {
         setSource("Error");
         setAlerts([{ priority: "P1", sku: "System", msg: `Error loading feed status: ${data.error}` }]);
       }
@@ -131,28 +163,80 @@ export default function Home() {
     }
 
     setFeedStatus(data);
-  }, [source]); // Depend on source to avoid redundant alerts
+  }, [source]);
+
+  const fetchAgentEvents = useCallback(async (runId: string | null) => {
+    if (!runId) {
+      setAgentEvents([]); // Clear events if no run ID
+      return;
+    }
+    try {
+      const res = await fetch(`/api/agent/events?run_id=${runId}`, { cache: "no-store" });
+      const data = await res.json();
+      if (data.events) {
+        setAgentEvents(data.events);
+      } else {
+        setAgentEvents([]);
+      }
+    } catch (e) {
+      console.error("Failed to fetch agent events:", e);
+      setAgentEvents([]); // Clear events on error
+    }
+  }, []);
 
   const refreshData = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
     logEvent("sensing", `Triggered data refresh`);
     try {
-      await Promise.all([loadOverview(), loadFeedStatus()]);
-    } catch (e) {
-      logEvent("error", `Data refresh failed: ${String(e)}`);
+      // Initiate the refresh and get the run_id
+      const refreshRes = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST", cache: "no-store" });
+      const refreshData = await refreshRes.json();
+
+      if (refreshData.status === "error") {
+        logEvent("error", `Feed refresh failed: ${refreshData.message}`);
+        setActionMsg(`Error: ${refreshData.message}`);
+        setSource("Error");
+        setAlerts([{ priority: "P1", sku: "System", msg: `Refresh failed: ${refreshData.message}` }]);
+        setFeedStatus({ status: "error", error: refreshData.message, error_type: refreshData.error_type });
+        setCurrentRunId(refreshData.run_id || null); // Capture run_id even on error
+        await fetchAgentEvents(refreshData.run_id || null); // Fetch events for the failed run
+      } else {
+        setActionMsg(`Feed refresh initiated. Run ID: ${refreshData.run_id}. Check status.`);
+        setCurrentRunId(refreshData.run_id || null); // Store the new run ID
+        await fetchAgentEvents(refreshData.run_id || null); // Fetch initial events for the new run
+        await loadOverview(); // Load overview to get latest snapshot data
+        await loadFeedStatus(); // Load feed status
+      }
+    } catch (e: any) {
+      logEvent("error", `Data refresh API call failed: ${e.message}`);
+      setActionMsg(`Error initiating refresh: ${e.message}`);
       setSource("Error");
-      setAlerts([{ priority: "P1", sku: "System", msg: "Failed to refresh data." }]);
+      setAlerts([{ priority: "P1", sku: "System", msg: "Failed to initiate data refresh." }]);
+      setFeedStatus({ status: "error", error: e.message });
     } finally {
       setRefreshing(false);
     }
-  }, [loadOverview, loadFeedStatus, refreshing]);
+  }, [loadOverview, loadFeedStatus, fetchAgentEvents, refreshing, fetchSize]);
 
   useEffect(() => {
+    // Initial load
     refreshData();
+
+    // Auto-refresh interval
     const id = setInterval(refreshData, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
     return () => clearInterval(id);
-  }, [autoRefreshMins, autoRefreshOn, refreshData]); // refreshData is now stable due to useCallback
+  }, [autoRefreshMins, autoRefreshOn, refreshData]);
+
+  // Fetch events periodically if a run is active
+  useEffect(() => {
+    if (currentRunId) {
+      const eventInterval = setInterval(() => {
+        fetchAgentEvents(currentRunId);
+      }, 5000); // Fetch events every 5 seconds
+      return () => clearInterval(eventInterval);
+    }
+  }, [currentRunId, fetchAgentEvents]);
 
   const filteredRows = useMemo(
     () =>
@@ -175,52 +259,61 @@ export default function Home() {
     if (page > totalPages) setPage(1);
   }, [page, totalPages]);
 
-  const triggerRefresh = async () => {
-    setRefreshing(true);
-    logEvent("sensing", `Triggered feed refresh limit=${fetchSize}`);
-    try {
-      const res = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST" });
-      const data = await res.json();
-      if (data.status === "error") {
-        logEvent("error", `Feed refresh failed: ${data.message}`);
-        setActionMsg(`Error: ${data.message}`);
-      } else {
-        logEvent("integration", `Feed refresh done: ${JSON.stringify(data)}`);
-        setActionMsg(`Feed refresh initiated. Check status.`);
-      }
-    } catch (e: any) {
-      logEvent("error", `Feed refresh API call failed: ${e.message}`);
-      setActionMsg(`Error initiating refresh: ${e.message}`);
-    } finally {
-      await Promise.all([loadOverview(), loadFeedStatus()]); // Always refresh overview and status
-      setRefreshing(false);
-    }
-  };
-
-  const triggerAction = async (actionType: string, row: Row) => {
-    logEvent("act", `${actionType} requested for ${row.sku_id}`);
-    try {
-      const res = await fetch("/api/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-user-role": "manager" },
-        body: JSON.stringify({ action_type: actionType, payload: { sku_id: row.sku_id }, user_id: "ui-user", user_role: "manager" }),
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        setActionMsg(`${actionType}: Error - ${text}`);
-        logEvent("error", `${actionType} failed: ${text}`);
-      } else {
-        setActionMsg(`${actionType}: ${text}`);
-        logEvent("respond", `${actionType} response: ${text}`);
-      }
-    } catch (e: any) {
-      setActionMsg(`${actionType}: Network error - ${e.message}`);
-      logEvent("error", `${actionType} network error: ${e.message}`);
-    }
-  };
+  // Button text for refresh
+  const refreshButtonText = refreshing ? "Fetching..." : "Refresh Now";
 
   // Determine if there's a critical error preventing data display
-  const isSystemError = feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE || source === "❌ Auth Missing" || source === "Error";
+  const isSystemError = feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE ||
+                        feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE ||
+                        feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE ||
+                        source === "❌ Auth Missing" || source === "Error";
+
+  // Extract summary info from agent events
+  const latestEvent = agentEvents.length > 0 ? agentEvents[0] : null;
+  const currentStage = latestEvent ? latestEvent.stage : 'IDLE';
+  const currentStatus = latestEvent ? latestEvent.status : 'IDLE';
+  const currentMessage = latestEvent ? latestEvent.message : 'No events yet.';
+
+  const progressSummary = {
+    requested: feedStatus.latest_run?.skus_fetched ?? latestEvent?.requested_limit ?? fetchSize,
+    active_skus: feedStatus.active_skus ?? latestEvent?.total_skus ?? '--',
+    processed_rows: feedStatus.latest_run?.rows_written ?? latestEvent?.processed_rows ?? '--',
+    latest_snapshot_rows: feedStatus.latest_snapshot_rows ?? '--',
+    current_stage: currentStage,
+    current_status: currentStatus,
+    current_message: currentMessage,
+    run_id: currentRunId,
+    error_type: feedStatus.error_type || latestEvent?.error_type || null,
+    error_message: feedStatus.error || latestEvent?.message || null,
+  };
+
+  // Update agent status and steps based on backend events
+  useEffect(() => {
+    if (isSystemError) {
+      setAgentStatus('error');
+      setAgentSteps([{step: 'error', content: 'System authentication error. Agent cannot run.'}]);
+      setAgentError("GCP Authentication Missing or Configuration Error. Agent functionality is blocked.");
+    } else if (latestEvent) {
+      setAgentStatus(mapBackendStageToAgentStep(latestEvent.stage) as Status);
+      setAgentSteps(prev => {
+        // Add new event if it's different from the last one
+        if (prev.length === 0 || prev[0].content !== latestEvent.message) {
+          return [{step: mapBackendStageToAgentStep(latestEvent.stage), content: latestEvent.message}, ...prev].slice(0, 10); // Keep last 10 steps
+        }
+        return prev;
+      });
+      if (latestEvent.status === 'ERROR') {
+        setAgentError(latestEvent.message);
+      } else {
+        setAgentError(null); // Clear error if not in error state
+      }
+    } else {
+      setAgentStatus('idle');
+      setAgentSteps([]);
+      setAgentError(null);
+    }
+  }, [latestEvent, isSystemError]);
+
 
   return (
     <main className="flex min-h-screen flex-col bg-gray-950">
@@ -241,17 +334,16 @@ export default function Home() {
       <AlertTicker alerts={alerts} />
       <div className="flex flex-1 p-4 gap-4">
         <div className="w-[30%] flex flex-col gap-3 h-full overflow-y-auto">
-          {/* Pass agent status and error to AgentControlCenter */}
           <AgentControlCenter
             status={isSystemError ? 'error' : agentStatus}
             steps={isSystemError ? [{step: 'error', content: 'System authentication error. Agent cannot run.'}] : agentSteps}
-            error={isSystemError ? "GCP Authentication Missing. Agent functionality is blocked." : agentError}
+            error={isSystemError ? "GCP Authentication Missing or Configuration Error. Agent functionality is blocked." : agentError}
             alerts={alerts}
           />
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[11px] text-slate-200">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold">Agent Timeline</h4>
-              <button onClick={triggerRefresh} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Refreshing..." : "Refresh Now"}</button>
+              <button onClick={refreshData} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Fetching..." : "Refresh Now"}</button>
             </div>
             <div className="mb-2 flex items-center gap-2">
               <label className="text-slate-300">Fetch Limit</label>
@@ -261,7 +353,7 @@ export default function Home() {
                 max={5000}
                 value={fetchSize}
                 onChange={(e) => setFetchSize(Math.max(1, Number(e.target.value) || 1))}
-                disabled={isSystemError}
+                disabled={isSystemError || refreshing}
                 className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
               />
             </div>
@@ -274,12 +366,15 @@ export default function Home() {
                 <option value="15">15m</option>
               </select>
             </div>
-            <div className="mb-2 text-slate-300">Run: {feedStatus.latest_run?.run_id || "--"}</div>
-            <div className="mb-2 text-slate-300">Requested: {fetchSize} · Source Active SKUs: {feedStatus.active_skus ?? "--"}</div>
-            <div className="mb-2 text-slate-300">Rows: {feedStatus.latest_run?.rows_written ?? 0} / SKUs: {feedStatus.latest_run?.skus_fetched ?? 0}</div>
-            <div className="mb-2 text-slate-300">Latest Snapshot Rows: {feedStatus.latest_snapshot_rows ?? "--"}</div>
+            <div className="mb-2 text-slate-300">Run ID: {progressSummary.run_id || "--"}</div>
+            <div className="mb-2 text-slate-300">Requested: {progressSummary.requested} · Active SKUs: {progressSummary.active_skus}</div>
+            <div className="mb-2 text-slate-300">Rows Written: {progressSummary.processed_rows} · Snapshot Rows: {progressSummary.latest_snapshot_rows}</div>
             <div className="max-h-52 overflow-y-auto space-y-1">
-              {events.length === 0 ? <div className="text-slate-500">No agent events yet.</div> : events.map((e, i) => <div key={i} className="bg-slate-800 rounded p-1"><span className="text-emerald-300">{e.ts}</span> [{e.phase}] {e.message}</div>)}
+              {agentEvents.length === 0 ? <div className="text-slate-500">No agent events yet.</div> : agentEvents.map((e, i) => (
+                <div key={i} className="bg-slate-800 rounded p-1">
+                  <span className="text-emerald-300">{new Date(e.timestamp).toLocaleTimeString()}</span> [{e.stage}] [{e.status}] {e.message}
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -299,9 +394,11 @@ export default function Home() {
             </div>
             {isSystemError ? (
               <div className="text-red-400 text-center py-4">
-                <p className="font-semibold">System Error: GCP Authentication Missing</p>
-                <p className="text-sm">Please configure your Google Cloud credentials.</p>
-                <p className="text-xs mt-1">Run: <code>gcloud auth application-default login</code></p>
+                <p className="font-semibold">System Error: {feedStatus.error_type || "Unknown Error"}</p>
+                <p className="text-sm">{feedStatus.error || "Please check system configuration."}</p>
+                {feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Run: <code>gcloud auth application-default login</code></p>}
+                {feedStatus.error_type === BIGQUERY_TABLE_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Table: {feedStatus.error?.replace("BigQuery table not found: ", "")}</p>}
+                {feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE && <p className="text-xs mt-1">Ensure SERPAPI_KEY is set in your .env.local</p>}
               </div>
             ) : (
               <>
