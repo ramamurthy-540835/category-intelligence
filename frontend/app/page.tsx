@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import AgentControlCenter from "@/components/chat/AgentControlCenter";
 import AlertTicker from "@/components/AlertTicker";
+import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
 type Row = {
@@ -18,16 +19,27 @@ type Row = {
   snapshot_time?: string;
 };
 
-type OverviewPayload = { source?: string; timestamp?: string; alerts?: Alert[]; rows?: Row[] };
+type OverviewPayload = {
+  source?: string;
+  timestamp?: string;
+  alerts?: Alert[];
+  rows?: Row[];
+  error?: string; // To capture backend errors
+  error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
+};
 
 type FeedStatus = {
   status: string;
   active_skus?: number;
   latest_snapshot_rows?: number;
   latest_run?: { run_id: string; timestamp: string; skus_fetched: number; rows_written: number; status: string };
+  error?: string; // To capture backend errors
+  error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
 };
 
 type AgentEvent = { ts: string; phase: string; message: string };
+
+const GCP_AUTH_MISSING_ERROR_TYPE = "GCP_AUTH_MISSING";
 
 export default function Home() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -48,40 +60,99 @@ export default function Home() {
   const [autoRefreshMins, setAutoRefreshMins] = useState(1);
   const [autoRefreshOn, setAutoRefreshOn] = useState(true);
 
+  // Agent state for AgentControlCenter
+  const [agentStatus, setAgentStatus] = useState<Status>('idle');
+  const [agentSteps, setAgentSteps] = useState<{step: AgentStep, content: string}[]>([]);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
   const logEvent = (phase: string, message: string) => {
     setEvents((prev) => [{ ts: new Date().toLocaleTimeString(), phase, message }, ...prev].slice(0, 20));
   };
 
-  const loadOverview = async () => {
+  const loadOverview = useCallback(async () => {
     const params = new URLSearchParams({ q: query, stock: stockFilter, limit: String(fetchSize), offset: "0" });
     const res = await fetch(`/api/dashboard/overview?${params.toString()}`, { cache: "no-store" });
     const data: OverviewPayload = await res.json();
+
+    if (data.error_type === GCP_AUTH_MISSING_ERROR_TYPE) {
+      setSource("❌ Auth Missing");
+      setAlerts([{ priority: "P1", sku: "System", msg: "GCP Authentication Missing. Please log in." }]);
+      setRows([]);
+      setTimestamp("");
+      setFeedStatus({ status: "error", error: data.message, error_type: data.error_type });
+      return;
+    }
+
+    if (data.error) {
+      setSource("Error");
+      setAlerts([{ priority: "P1", sku: "System", msg: `Error loading data: ${data.error}` }]);
+      setRows([]);
+      setTimestamp("");
+      setFeedStatus({ status: "error", error: data.error });
+      return;
+    }
+
     if (Array.isArray(data.rows) && data.rows.length > 0) {
       setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
       setRows(data.rows);
       setSource(data.source || "unknown");
       setTimestamp(data.timestamp || "");
+      setFeedStatus(prev => ({ ...prev, error: undefined, error_type: undefined })); // Clear previous errors
+    } else {
+      // Handle cases where data.rows might be empty but no explicit error
+      setSource(data.source || "unknown");
+      setTimestamp(data.timestamp || "");
+      setAlerts([]);
+      setRows([]);
     }
-  };
+  }, [query, stockFilter, fetchSize]);
 
-  const loadFeedStatus = async () => {
+  const loadFeedStatus = useCallback(async () => {
     const res = await fetch("/api/feeds/prices/status", { cache: "no-store" });
     const data: FeedStatus = await res.json();
+
+    if (data.error_type === GCP_AUTH_MISSING_ERROR_TYPE) {
+      setFeedStatus({ status: "error", error: data.message, error_type: data.error_type });
+      // If feed status fails due to auth, and overview hasn't already, update overview status
+      if (source !== "❌ Auth Missing") {
+        setSource("❌ Auth Missing");
+        setAlerts([{ priority: "P1", sku: "System", msg: "GCP Authentication Missing. Please log in." }]);
+      }
+      return;
+    }
+
+    if (data.status === "error") {
+      setFeedStatus({ status: "error", error: data.error });
+      if (source !== "Error") { // Avoid overwriting specific auth error message
+        setSource("Error");
+        setAlerts([{ priority: "P1", sku: "System", msg: `Error loading feed status: ${data.error}` }]);
+      }
+      return;
+    }
+
     setFeedStatus(data);
-  };
+  }, [source]); // Depend on source to avoid redundant alerts
+
+  const refreshData = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    logEvent("sensing", `Triggered data refresh`);
+    try {
+      await Promise.all([loadOverview(), loadFeedStatus()]);
+    } catch (e) {
+      logEvent("error", `Data refresh failed: ${String(e)}`);
+      setSource("Error");
+      setAlerts([{ priority: "P1", sku: "System", msg: "Failed to refresh data." }]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadOverview, loadFeedStatus, refreshing]);
 
   useEffect(() => {
-    const run = async () => {
-      try {
-        await Promise.all([loadOverview(), loadFeedStatus()]);
-      } catch {
-        setSource("error");
-      }
-    };
-    run();
-    const id = setInterval(run, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
+    refreshData();
+    const id = setInterval(refreshData, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
     return () => clearInterval(id);
-  }, [query, stockFilter, autoRefreshMins, autoRefreshOn, fetchSize]);
+  }, [autoRefreshMins, autoRefreshOn, refreshData]); // refreshData is now stable due to useCallback
 
   const filteredRows = useMemo(
     () =>
@@ -107,24 +178,49 @@ export default function Home() {
   const triggerRefresh = async () => {
     setRefreshing(true);
     logEvent("sensing", `Triggered feed refresh limit=${fetchSize}`);
-    const res = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST" });
-    const data = await res.json();
-    logEvent("integration", `Feed refresh done: ${JSON.stringify(data)}`);
-    await Promise.all([loadOverview(), loadFeedStatus()]);
-    setRefreshing(false);
+    try {
+      const res = await fetch(`/api/feeds/prices?limit=${fetchSize}`, { method: "POST" });
+      const data = await res.json();
+      if (data.status === "error") {
+        logEvent("error", `Feed refresh failed: ${data.message}`);
+        setActionMsg(`Error: ${data.message}`);
+      } else {
+        logEvent("integration", `Feed refresh done: ${JSON.stringify(data)}`);
+        setActionMsg(`Feed refresh initiated. Check status.`);
+      }
+    } catch (e: any) {
+      logEvent("error", `Feed refresh API call failed: ${e.message}`);
+      setActionMsg(`Error initiating refresh: ${e.message}`);
+    } finally {
+      await Promise.all([loadOverview(), loadFeedStatus()]); // Always refresh overview and status
+      setRefreshing(false);
+    }
   };
 
   const triggerAction = async (actionType: string, row: Row) => {
     logEvent("act", `${actionType} requested for ${row.sku_id}`);
-    const res = await fetch("/api/action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-user-role": "manager" },
-      body: JSON.stringify({ action_type: actionType, payload: { sku_id: row.sku_id }, user_id: "ui-user", user_role: "manager" }),
-    });
-    const text = await res.text();
-    setActionMsg(`${actionType}: ${text}`);
-    logEvent("respond", `${actionType} response: ${text}`);
+    try {
+      const res = await fetch("/api/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-user-role": "manager" },
+        body: JSON.stringify({ action_type: actionType, payload: { sku_id: row.sku_id }, user_id: "ui-user", user_role: "manager" }),
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        setActionMsg(`${actionType}: Error - ${text}`);
+        logEvent("error", `${actionType} failed: ${text}`);
+      } else {
+        setActionMsg(`${actionType}: ${text}`);
+        logEvent("respond", `${actionType} response: ${text}`);
+      }
+    } catch (e: any) {
+      setActionMsg(`${actionType}: Network error - ${e.message}`);
+      logEvent("error", `${actionType} network error: ${e.message}`);
+    }
   };
+
+  // Determine if there's a critical error preventing data display
+  const isSystemError = feedStatus.error_type === GCP_AUTH_MISSING_ERROR_TYPE || source === "❌ Auth Missing" || source === "Error";
 
   return (
     <main className="flex min-h-screen flex-col bg-gray-950">
@@ -134,22 +230,28 @@ export default function Home() {
         <span className="text-xs text-blue-300 ml-1">POWERED BY ADEPT AI</span>
       </header>
       <div className="bg-slate-900 border-b border-slate-700 px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
-        <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>{source}</span></span>
+        <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : source.includes("Auth Missing") ? "text-red-400 font-semibold" : source.includes("Error") ? "text-red-400 font-semibold" : "text-amber-300 font-semibold"}>{source}</span></span>
         <span className="flex items-center gap-3">
           <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
-          <span className={`px-2 py-0.5 rounded ${feedStatus.latest_run?.status === "success" ? "bg-emerald-900 text-emerald-300" : "bg-amber-900 text-amber-300"}`}>
-            {feedStatus.latest_run?.status || "unknown"}
+          <span className={`px-2 py-0.5 rounded ${feedStatus.status === "ok" ? "bg-emerald-900 text-emerald-300" : feedStatus.status === "loading" ? "bg-gray-700 text-gray-300" : "bg-red-900 text-red-300"}`}>
+            {feedStatus.status === "loading" ? "Loading..." : feedStatus.status === "ok" ? "Connected" : "Error"}
           </span>
         </span>
       </div>
       <AlertTicker alerts={alerts} />
       <div className="flex flex-1 p-4 gap-4">
         <div className="w-[30%] flex flex-col gap-3 h-full overflow-y-auto">
-          <AgentControlCenter alerts={alerts} />
+          {/* Pass agent status and error to AgentControlCenter */}
+          <AgentControlCenter
+            status={isSystemError ? 'error' : agentStatus}
+            steps={isSystemError ? [{step: 'error', content: 'System authentication error. Agent cannot run.'}] : agentSteps}
+            error={isSystemError ? "GCP Authentication Missing. Agent functionality is blocked." : agentError}
+            alerts={alerts}
+          />
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[11px] text-slate-200">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold">Agent Timeline</h4>
-              <button onClick={triggerRefresh} disabled={refreshing} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Refreshing..." : "Refresh Now"}</button>
+              <button onClick={triggerRefresh} disabled={refreshing || isSystemError} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{refreshing ? "Refreshing..." : "Refresh Now"}</button>
             </div>
             <div className="mb-2 flex items-center gap-2">
               <label className="text-slate-300">Fetch Limit</label>
@@ -159,13 +261,14 @@ export default function Home() {
                 max={5000}
                 value={fetchSize}
                 onChange={(e) => setFetchSize(Math.max(1, Number(e.target.value) || 1))}
+                disabled={isSystemError}
                 className="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
               />
             </div>
             <div className="mb-2 flex items-center gap-2">
               <label className="text-slate-300">Auto Refresh</label>
-              <input type="checkbox" checked={autoRefreshOn} onChange={(e) => setAutoRefreshOn(e.target.checked)} />
-              <select value={String(autoRefreshMins)} onChange={(e) => setAutoRefreshMins(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5">
+              <input type="checkbox" checked={autoRefreshOn} onChange={(e) => setAutoRefreshOn(e.target.checked)} disabled={isSystemError} />
+              <select value={String(autoRefreshMins)} onChange={(e) => setAutoRefreshMins(Number(e.target.value))} disabled={isSystemError} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5">
                 <option value="1">1m</option>
                 <option value="5">5m</option>
                 <option value="15">15m</option>
@@ -184,38 +287,50 @@ export default function Home() {
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-3">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-white">Live Pricing Intelligence</h3>
-              <span className="text-[11px] text-slate-400">{filteredRows.length} SKUs</span>
+              <span className={`text-[11px] ${isSystemError ? 'text-red-400' : 'text-slate-400'}`}>
+                {isSystemError ? "System Error" : `${filteredRows.length} SKUs`}
+              </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU..." className="md:col-span-2 bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700" />
-              <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "in" | "out")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="all">All Stock</option><option value="in">In Stock</option><option value="out">Out of Stock</option></select>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "gap_desc" | "gap_asc" | "name")} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="gap_desc">Largest Gap</option><option value="gap_asc">Smallest Gap</option><option value="name">Name</option></select>
-              <select value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">10/page</option><option value="20">20/page</option><option value="50">50/page</option></select>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU..." disabled={isSystemError} className="md:col-span-2 bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700" />
+              <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "in" | "out")} disabled={isSystemError} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="all">All Stock</option><option value="in">In Stock</option><option value="out">Out of Stock</option></select>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "gap_desc" | "gap_asc" | "name")} disabled={isSystemError} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="gap_desc">Largest Gap</option><option value="gap_asc">Smallest Gap</option><option value="name">Name</option></select>
+              <select value={String(pageSize)} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} disabled={isSystemError} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="10">10/page</option><option value="20">20/page</option><option value="50">50/page</option></select>
             </div>
-            <div className="max-h-64 overflow-y-auto">
-              <table className="w-full text-[11px] text-left">
-                <thead className="text-slate-400 border-b border-slate-700"><tr><th className="py-1">SKU</th><th className="py-1">Our</th><th className="py-1">Market</th><th className="py-1">Gap %</th><th className="py-1">Stock</th></tr></thead>
-                <tbody className="text-slate-200">
-                  {pagedRows.map((row) => {
-                    const name = row.name || row.sku_name || row.sku_id;
-                    const our = row.our_price ?? row.retailer_price ?? 0;
-                    return (
-                      <tr key={row.sku_id} className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/60" onClick={() => setSelected(row)}>
-                        <td className="py-1">{name}</td><td className="py-1">${our.toFixed(2)}</td><td className="py-1">${row.competitor_price.toFixed(2)}</td>
-                        <td className={`py-1 font-semibold ${row.price_gap_pct >= 0 ? "text-amber-300" : "text-emerald-300"}`}>{row.price_gap_pct >= 0 ? "+" : ""}{row.price_gap_pct.toFixed(1)}%</td>
-                        <td className="py-1">{row.in_stock ? "In" : "Out"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
-              <span>Page {safePage}/{totalPages} · {filteredRows.length} rows</span>
-              <div className="flex gap-1"><button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">Prev</button><button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">Next</button></div>
-            </div>
+            {isSystemError ? (
+              <div className="text-red-400 text-center py-4">
+                <p className="font-semibold">System Error: GCP Authentication Missing</p>
+                <p className="text-sm">Please configure your Google Cloud credentials.</p>
+                <p className="text-xs mt-1">Run: <code>gcloud auth application-default login</code></p>
+              </div>
+            ) : (
+              <>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-[11px] text-left">
+                    <thead className="text-slate-400 border-b border-slate-700"><tr><th className="py-1">SKU</th><th className="py-1">Our</th><th className="py-1">Market</th><th className="py-1">Gap %</th><th className="py-1">Stock</th></tr></thead>
+                    <tbody className="text-slate-200">
+                      {pagedRows.map((row) => {
+                        const name = row.name || row.sku_name || row.sku_id;
+                        const our = row.our_price ?? row.retailer_price ?? 0;
+                        return (
+                          <tr key={row.sku_id} className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/60" onClick={() => setSelected(row)}>
+                            <td className="py-1">{name}</td><td className="py-1">${our.toFixed(2)}</td><td className="py-1">${row.competitor_price.toFixed(2)}</td>
+                            <td className={`py-1 font-semibold ${row.price_gap_pct >= 0 ? "text-amber-300" : "text-emerald-300"}`}>{row.price_gap_pct >= 0 ? "+" : ""}{row.price_gap_pct.toFixed(1)}%</td>
+                            <td className="py-1">{row.in_stock ? "In" : "Out"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
+                  <span>Page {safePage}/{totalPages} · {filteredRows.length} rows</span>
+                  <div className="flex gap-1"><button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1 || isSystemError} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">Prev</button><button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages || isSystemError} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">Next</button></div>
+                </div>
+              </>
+            )}
           </div>
-          {selected && (
+          {selected && !isSystemError && (
             <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[12px] text-slate-200">
               <div className="flex items-center justify-between mb-2"><h4 className="font-semibold">SKU Detail: {selected.name || selected.sku_name || selected.sku_id}</h4><button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white">Close</button></div>
               <div className="grid grid-cols-2 gap-2 mb-3"><div>SKU: {selected.sku_id}</div><div>Stock: {selected.in_stock ? "In Stock" : "Out"}</div><div>Gap: {selected.price_gap_pct.toFixed(2)}%</div><div>Snapshot: {selected.snapshot_time || "--"}</div></div>

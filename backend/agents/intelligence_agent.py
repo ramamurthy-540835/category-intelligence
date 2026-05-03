@@ -3,6 +3,7 @@ import asyncio
 import logging
 from typing import AsyncIterator, List, Dict, Any
 from core.audit.logger import AuditLogger
+from google.auth import default, exceptions as google_auth_exceptions
 
 log = logging.getLogger(__name__)
 
@@ -68,14 +69,36 @@ class IntelligenceAgent:
         self.tools = {t.name: t for t in tool_instances} if tool_instances else {}
         self.audit_logger = audit_logger
         self.model = None
+        self.auth_error = None
         try:
+            credentials, project = default()
+            if not project:
+                project = PROJECT
+            if not project:
+                raise google_auth_exceptions.DefaultCredentialsError("GCP Project ID is not set.")
+            
+            os.environ["GCP_PROJECT_ID"] = project # Ensure it's set for other modules
+            self.project_id = project
+            
             import vertexai
             from vertexai.generative_models import GenerativeModel
-            vertexai.init(project=PROJECT, location=REGION)
+            vertexai.init(project=self.project_id, location=REGION)
             self.model = GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
-            log.info("Vertex AI ready: project=%s model=%s", PROJECT, MODEL)
+            log.info("Vertex AI ready: project=%s model=%s", self.project_id, MODEL)
+        except google_auth_exceptions.DefaultCredentialsError as e:
+            log.error("GCP_AUTH_MISSING: Vertex AI initialization failed. Error: %s", e)
+            self.auth_error = {
+                "error_type": "GCP_AUTH_MISSING",
+                "message": "GCP Application Default Credentials not found for Vertex AI.",
+                "fix": "Run: gcloud auth application-default login"
+            }
         except Exception as e:
             log.error("Vertex AI init failed: %s", e)
+            self.auth_error = {
+                "error_type": "VERTEX_AI_ERROR",
+                "message": f"Vertex AI initialization failed: {e}",
+                "fix": "Check Vertex AI configuration and permissions."
+            }
 
     async def stream_response(
         self,
@@ -84,6 +107,10 @@ class IntelligenceAgent:
         user_id: str = "anonymous",
         user_role: str = "viewer",
     ) -> AsyncIterator[Dict[str, str]]:
+        if self.auth_error:
+            yield {"step": "error", "content": f"Authentication Error: {self.auth_error['message']}"}
+            return
+
         try:
             yield {"step": "think", "content": "Reviewing question and forming analysis plan..."}
             await asyncio.sleep(0.05)
@@ -93,10 +120,6 @@ class IntelligenceAgent:
 
             yield {"step": "analyze", "content": "Synthesizing results and identifying patterns..."}
             await asyncio.sleep(0.05)
-
-            if self.model is None:
-                yield {"step": "error", "content": "Vertex AI not initialized — check ADC credentials"}
-                return
 
             from vertexai.generative_models import GenerativeModel
             response = await asyncio.to_thread(

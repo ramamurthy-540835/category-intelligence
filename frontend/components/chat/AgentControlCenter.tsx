@@ -16,8 +16,11 @@ interface Props {
 
 export default function AgentControlCenter({ status = 'idle', steps = [], error, alerts = [] }: Props) {
   const PHASES = ['Think', 'Act', 'Analyze', 'Respond'];
-  const latestStepContent = steps.length > 0 ? steps[steps.length - 1].content : '';
-  const latestStepType = steps.length > 0 ? steps[steps.length - 1].step : '';
+  
+  // Determine the latest relevant step for phase highlighting
+  const lastRelevantStep = steps.slice().reverse().find(s => PHASES.map(p => p.toLowerCase()).includes(s.step));
+  const latestStepContent = lastRelevantStep ? lastRelevantStep.content : '';
+  const latestStepType = lastRelevantStep ? lastRelevantStep.step : '';
 
   const getBadgeText = () => {
     if (status === 'error') return 'Error';
@@ -35,19 +38,25 @@ export default function AgentControlCenter({ status = 'idle', steps = [], error,
 
   const getPhaseCardClasses = (phase: string) => {
     const phaseLower = phase.toLowerCase();
-    const currentPhaseIndex = PHASES.findIndex(p => p.toLowerCase() === latestStepType);
     const thisPhaseIndex = PHASES.indexOf(phase);
+    const currentPhaseIndex = PHASES.indexOf(phase.charAt(0).toUpperCase() + phase.slice(1)); // Match case
+
+    if (status === 'error') {
+      // If error, highlight the phase that errored, or show all as completed if error is generic
+      if (latestStepType === phaseLower) {
+        return 'bg-red-900/40 border border-red-500 text-red-200';
+      } else if (thisPhaseIndex < currentPhaseIndex) {
+         return 'bg-emerald-900/30 border border-emerald-500 text-emerald-200'; // Completed before error
+      }
+      return 'bg-gray-800 border border-gray-600 text-gray-400'; // Not reached
+    }
 
     if (status === 'done') {
-      // If done or error, all phases up to the last executed step are "completed"
-      if (thisPhaseIndex <= currentPhaseIndex || (status === 'done' && thisPhaseIndex < PHASES.length)) {
-        return 'bg-emerald-900/30 border border-emerald-500 text-emerald-200';
-      }
-    }
-    if (status === 'error' && latestStepType === phaseLower) {
-      return 'bg-red-900/40 border border-red-500 text-red-200';
+      // If done, all phases are considered completed
+      return 'bg-emerald-900/30 border border-emerald-500 text-emerald-200';
     }
 
+    // For streaming status
     if (latestStepType === phaseLower) {
       return 'bg-blue-900 border border-blue-400 text-white shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'; // Active
     } else if (thisPhaseIndex < currentPhaseIndex) {
