@@ -21,7 +21,7 @@ class CompetitorPriceFeed:
     SERPAPI_URL = "https://serpapi.com/search.json"
     COMPETITOR_NAME = "Google Shopping"
     # Use the dataset from the environment variable
-    PROJECT = os.environ.get("GCP_PROJECT_ID", "ctoteam")
+    PROJECT = os.environ.get("GCP_PROJECT_ID", os.environ.get("GOOGLE_CLOUD_PROJECT"))
     DATASET = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
     TABLE_NAME = "competitor_price_snapshots"
     RUNS_TABLE_NAME = "competitor_price_feed_runs"
@@ -207,6 +207,10 @@ class CompetitorPriceFeed:
             if bq_client_instance is None or bq_client_instance._client is None:
                 raise RuntimeError("GCP_AUTH_MISSING: BigQuery client not available.")
             
+            # Check if SERPAPI_KEY is set before proceeding
+            if not SERPAPI_KEY:
+                raise ValueError("SERPAPI_KEY environment variable not set.")
+
             return await self.fetch_live_snapshot(limit=limit)
         except RuntimeError as e:
             log.error(f"Feed run failed due to auth error: {e}")
