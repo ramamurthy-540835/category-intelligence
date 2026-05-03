@@ -4,6 +4,7 @@ import aiohttp
 import re
 import datetime
 import uuid
+import logging # Import the logging module
 from typing import List, Dict, Any, Optional
 
 from google.cloud import bigquery
