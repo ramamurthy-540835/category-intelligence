@@ -415,7 +415,7 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-1 text-[10px]">
                 <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>BigQuery Dataset</div>
                 <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.status === 'ok' ? 'bg-green-500' : 'bg-red-500'}`}></span>SKU Master Table</div>
-                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${SERPAPI_KEY ? 'bg-green-500' : 'bg-red-500'}`}></span>SERPAPI</div>
+                <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE ? 'bg-red-500' : 'bg-green-500'}`}></span>SERPAPI</div>
                 <div className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${true ? 'bg-green-500' : 'bg-red-500'}`}></span>Vertex AI</div> {/* Assuming Vertex AI is always configured */}
               </div>
             </div>
