@@ -643,8 +643,10 @@ export default function Home() {
       </div>
 
       <AlertTicker alerts={alerts} />
-      <div className="flex flex-1 p-4 gap-4 min-h-0">
-        <div className="w-[26%] flex flex-col gap-3 h-full overflow-y-auto">
+      {/* 3-column row of operational panels — equal-width grid so each cell
+          shares the same height. Outer <main> is the only scroll container,
+          so per-column overflow-y-auto wrappers were removed (single scrollbar). */}
+      <div className="grid grid-cols-3 gap-2 px-4 pb-4 min-h-[480px]">
           <FlyoutCard
             title="Agents in Action"
             subtitle="Live execution monitor"
@@ -812,15 +814,13 @@ export default function Home() {
             </div>
           </div>
           </FlyoutCard>
-        </div>
-        <div className="flex-1 min-w-0 h-full flex flex-col">
           {/* ChatPanel renders directly (not inside FlyoutCard) so it's
               always mounted. That's required for the sidebar's
               cat-flow-prompt dispatch to reach it and for ChatPanel to
               broadcast cat-chat-status events the Strategy Loop listens to. */}
-          <ChatPanel />
-        </div>
-        <div className="flex-1 min-w-0 flex flex-col gap-3 h-full overflow-y-auto">
+          <div className="min-h-0">
+            <ChatPanel />
+          </div>
           <FlyoutCard
             title="Live Pricing Intelligence"
             subtitle={isSystemError ? "System Error" : "bigquery-live"}
@@ -925,35 +925,35 @@ export default function Home() {
             )}
           </div>
           </FlyoutCard>
-          {selected && !isSystemError && (
-            <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[12px] text-slate-200">
-              <div className="flex items-center justify-between mb-2"><h4 className="font-semibold">SKU Detail: {selected.name || selected.sku_name || selected.sku_id}</h4><button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white">Close</button></div>
-              <div className="grid grid-cols-2 gap-2 mb-3"><div>SKU: {selected.sku_id}</div><div>Stock: {selected.in_stock ? "In Stock" : "Out"}</div><div>Gap: {(Number(selected.price_gap_pct ?? 0) || 0).toFixed(2)}%</div><div>Snapshot: {selected.snapshot_time || "--"}</div></div>
-              <div className="flex gap-2 flex-wrap">
-                <button disabled={!!actionLoading} onClick={() => triggerAction("reprice", selected)} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{actionLoading === "reprice" ? "Running..." : "Reprice"}</button>
-                <button disabled={!!actionLoading} onClick={() => triggerAction("replenish", selected)} className="px-2 py-1 rounded bg-emerald-700 text-white disabled:opacity-50">{actionLoading === "replenish" ? "Running..." : "Replenish"}</button>
-                <button disabled={!!actionLoading} onClick={() => triggerAction("draft_coop_email", selected)} className="px-2 py-1 rounded bg-amber-700 text-white disabled:opacity-50">{actionLoading === "draft_coop_email" ? "Running..." : "Draft Co-op"}</button>
-                <button disabled={!!actionLoading} onClick={() => triggerAction("queue_campaign", selected)} className="px-2 py-1 rounded bg-purple-700 text-white disabled:opacity-50">{actionLoading === "queue_campaign" ? "Running..." : "Queue Campaign"}</button>
-              </div>
-              {actionMsg && <div className="mt-2 text-[11px] text-slate-300 bg-slate-800 rounded p-2">{actionMsg}</div>}
-              <div className="mt-2 bg-slate-800 rounded p-2">
-                <div className="text-[11px] font-semibold text-slate-200 mb-1">Recent Actions</div>
-                {actionHistory.length === 0 ? (
-                  <div className="text-[11px] text-slate-400">No actions yet.</div>
-                ) : (
-                  <div className="space-y-1">
-                    {actionHistory.map((a, i) => (
-                      <div key={`${a.timestamp}-${i}`} className="text-[11px] text-slate-300">
-                        {new Date(a.timestamp).toLocaleTimeString()} · {a.action} · {a.sku_name} ({a.sku_id}) · {a.status}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
       </div>
+      {/* SKU detail drawer — sits below the 3-column grid, full-width row. */}
+      {selected && !isSystemError && (
+        <div className="mx-4 mb-4 bg-slate-900 border border-slate-700 rounded-xl p-3 text-[12px] text-slate-200">
+          <div className="flex items-center justify-between mb-2"><h4 className="font-semibold">SKU Detail: {selected.name || selected.sku_name || selected.sku_id}</h4><button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white">Close</button></div>
+          <div className="grid grid-cols-2 gap-2 mb-3"><div>SKU: {selected.sku_id}</div><div>Stock: {selected.in_stock ? "In Stock" : "Out"}</div><div>Gap: {(Number(selected.price_gap_pct ?? 0) || 0).toFixed(2)}%</div><div>Snapshot: {selected.snapshot_time || "--"}</div></div>
+          <div className="flex gap-2 flex-wrap">
+            <button disabled={!!actionLoading} onClick={() => triggerAction("reprice", selected)} className="px-2 py-1 rounded bg-blue-700 text-white disabled:opacity-50">{actionLoading === "reprice" ? "Running..." : "Reprice"}</button>
+            <button disabled={!!actionLoading} onClick={() => triggerAction("replenish", selected)} className="px-2 py-1 rounded bg-emerald-700 text-white disabled:opacity-50">{actionLoading === "replenish" ? "Running..." : "Replenish"}</button>
+            <button disabled={!!actionLoading} onClick={() => triggerAction("draft_coop_email", selected)} className="px-2 py-1 rounded bg-amber-700 text-white disabled:opacity-50">{actionLoading === "draft_coop_email" ? "Running..." : "Draft Co-op"}</button>
+            <button disabled={!!actionLoading} onClick={() => triggerAction("queue_campaign", selected)} className="px-2 py-1 rounded bg-purple-700 text-white disabled:opacity-50">{actionLoading === "queue_campaign" ? "Running..." : "Queue Campaign"}</button>
+          </div>
+          {actionMsg && <div className="mt-2 text-[11px] text-slate-300 bg-slate-800 rounded p-2">{actionMsg}</div>}
+          <div className="mt-2 bg-slate-800 rounded p-2">
+            <div className="text-[11px] font-semibold text-slate-200 mb-1">Recent Actions</div>
+            {actionHistory.length === 0 ? (
+              <div className="text-[11px] text-slate-400">No actions yet.</div>
+            ) : (
+              <div className="space-y-1">
+                {actionHistory.map((a, i) => (
+                  <div key={`${a.timestamp}-${i}`} className="text-[11px] text-slate-300">
+                    {new Date(a.timestamp).toLocaleTimeString()} · {a.action} · {a.sku_name} ({a.sku_id}) · {a.status}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       </main>
       {/* BigQuery Explorer modal — full-screen overlay; Esc / click-outside / X to close */}
       {bqOpen && (
