@@ -10,6 +10,7 @@ import ChatPanel from "@/components/ChatPanel";
 import FlyoutCard from "@/components/FlyoutCard";
 import BQExplorer from "@/components/BQExplorer";
 import SellThroughChart from "@/components/SellThroughChart";
+import ScenarioSimulator from "@/components/ScenarioSimulator";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
@@ -635,9 +636,10 @@ export default function Home() {
         ))}
       </div>
 
-      {/* 13-week sell-through trend chart */}
+      {/* Trend chart by default; swaps to a live scenario simulator while
+          the "Simulate: Samsung" demo flow is active. */}
       <div className="px-4 pt-2 pb-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
-        <SellThroughChart />
+        {activeFlowId === "simulate-samsung" ? <ScenarioSimulator /> : <SellThroughChart />}
       </div>
 
       <AlertTicker alerts={alerts} />
@@ -872,18 +874,43 @@ export default function Home() {
               <>
                 <div className="max-h-64 overflow-y-auto">
                   <table className="w-full text-[11px] text-left">
-                    <thead className="text-slate-400 border-b border-slate-700"><tr><th className="py-1">SKU</th><th className="py-1">Our</th><th className="py-1">Market</th><th className="py-1">Gap %</th><th className="py-1">Stock</th></tr></thead>
+                    <thead className="text-slate-400 border-b border-slate-700"><tr><th className="py-1">SKU</th><th className="py-1">Our</th><th className="py-1">Market</th><th className="py-1">Gap %</th><th className="py-1">Stock</th><th className="py-1">Flag</th></tr></thead>
                     <tbody className="text-slate-200">
                       {pagedRows.map((row) => {
                         const name = row.name || row.sku_name || row.sku_id;
                         const our = Number(row.our_price ?? row.retailer_price ?? 0) || 0;
                         const market = Number(row.competitor_price ?? 0) || 0;
                         const gapPct = Number(row.price_gap_pct ?? 0) || 0;
+
+                        // Derived agent flag — fixed templates per spec.
+                        // Without DoS / forecast data we approximate from
+                        // gap_pct + stock; the displayed tooltip text matches
+                        // the Azure reference verbatim.
+                        const flag = !row.in_stock
+                          ? { name: "Expedite Order", tip: "9 days supply — order now to avoid stockout",        color: "bg-red-900/60 text-red-200 border border-red-800" }
+                          : gapPct > 7
+                          ? { name: "Price Review",   tip: "Priced above Amazon — consider $100 reduction",     color: "bg-amber-900/40 text-amber-200 border border-amber-700/50" }
+                          : gapPct > 0
+                          ? { name: "Monitor",        tip: "On track — no action needed",                       color: "bg-slate-800 text-slate-300 border border-slate-700" }
+                          : gapPct > -10
+                          ? { name: "Ad Spend Needed", tip: "31% below forecast — increase search spend",        color: "bg-purple-900/40 text-purple-200 border border-purple-800" }
+                          : { name: "Clearance Rec",  tip: "Below forecast — consider clearance pricing",       color: "bg-orange-900/40 text-orange-200 border border-orange-800" };
+
                         return (
-                          <tr key={row.sku_id} className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/60" onClick={() => setSelected(row)}>
-                            <td className="py-1">{name}</td><td className="py-1">${our.toFixed(2)}</td><td className="py-1">${market.toFixed(2)}</td>
+                          <tr
+                            key={row.sku_id}
+                            title={`${flag.name}: ${flag.tip}`}
+                            className="border-b border-slate-800 cursor-pointer hover:bg-[#1e3a5f] transition-colors"
+                            onClick={() => setSelected(row)}
+                          >
+                            <td className="py-1">{name}</td>
+                            <td className="py-1">${our.toFixed(2)}</td>
+                            <td className="py-1">${market.toFixed(2)}</td>
                             <td className={`py-1 font-semibold ${gapPct >= 0 ? "text-amber-300" : "text-emerald-300"}`}>{gapPct >= 0 ? "+" : ""}{gapPct.toFixed(1)}%</td>
                             <td className="py-1">{row.in_stock ? "In" : "Out"}</td>
+                            <td className="py-1">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${flag.color}`}>{flag.name}</span>
+                            </td>
                           </tr>
                         );
                       })}

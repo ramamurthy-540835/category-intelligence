@@ -9,11 +9,10 @@ import {
   Legend,
   ResponsiveContainer,
   CartesianGrid,
+  ReferenceLine,
+  type TooltipProps,
 } from "recharts";
 
-// 13-week sell-through trend — units by brand vs. forecast.
-// Static demo data; swap to a real /api/dashboard/sell_through endpoint
-// when the BigQuery weekly aggregation is wired.
 const SELL_THROUGH_DATA = [
   { week: "W40", Samsung: 420, Sony: 180, LG: 160, Forecast: 400 },
   { week: "W42", Samsung: 380, Sony: 195, LG: 145, Forecast: 390 },
@@ -23,6 +22,41 @@ const SELL_THROUGH_DATA = [
   { week: "W50", Samsung: 530, Sony: 220, LG: 110, Forecast: 500 },
   { week: "W52", Samsung: 560, Sony: 200, LG: 105, Forecast: 520 },
 ];
+
+// ── Custom tooltip ─────────────────────────────────────────────────────────
+function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div
+      style={{
+        background: "#1c2230",
+        border: "1px solid #2d4a6a",
+        borderRadius: 8,
+        padding: "10px 14px",
+        fontSize: 11,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+      }}
+    >
+      <p style={{ color: "#60a5fa", fontWeight: 600, marginBottom: 6, fontSize: 12 }}>{label}</p>
+      {payload.map((p) => (
+        <div
+          key={String(p.dataKey)}
+          style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}
+        >
+          <span style={{ color: p.color }}>● {p.name}</span>
+          <span style={{ color: "#fff", fontWeight: 600 }}>
+            {typeof p.value === "number" ? p.value.toLocaleString() : String(p.value)} units
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Custom legend formatter ────────────────────────────────────────────────
+const legendFormatter = (value: string, entry: any) => (
+  <span style={{ color: entry?.color, marginRight: 12, fontSize: 11 }}>● {value}</span>
+);
 
 export default function SellThroughChart() {
   return (
@@ -59,27 +93,67 @@ export default function SellThroughChart() {
           REAL-TIME
         </span>
       </div>
-      <ResponsiveContainer width="100%" height={200}>
+      <ResponsiveContainer width="100%" height={220}>
         <LineChart data={SELL_THROUGH_DATA} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
           <CartesianGrid stroke="#1e2532" strokeDasharray="3 3" />
           <XAxis dataKey="week" tick={{ fontSize: 10, fill: "#64748b" }} stroke="#475569" />
           <YAxis tick={{ fontSize: 10, fill: "#64748b" }} stroke="#475569" />
-          <Tooltip
-            contentStyle={{
-              background: "#1c2230",
-              border: "1px solid #2d3748",
-              borderRadius: 6,
-              fontSize: 11,
-              color: "#e2e8f0",
-            }}
-            labelStyle={{ color: "#94a3b8" }}
-            cursor={{ stroke: "#3b82f6", strokeOpacity: 0.4 }}
+          <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#3b82f6", strokeOpacity: 0.4 }} />
+          <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={legendFormatter} />
+
+          {/* Plan baseline reference */}
+          <ReferenceLine
+            y={400}
+            stroke="#475569"
+            strokeDasharray="3 3"
+            label={{ value: "Plan", fill: "#475569", fontSize: 10, position: "right" }}
           />
-          <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-          <Line type="monotone" dataKey="Samsung"  stroke="#3b82f6" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Sony"     stroke="#f59e0b" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="LG"       stroke="#ef4444" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="Forecast" stroke="#475569" strokeWidth={1} strokeDasharray="4 4" dot={false} />
+
+          <Line
+            type="monotone"
+            dataKey="Samsung"
+            stroke="#3b82f6"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            isAnimationActive
+            animationDuration={1200}
+            animationEasing="ease-out"
+          />
+          <Line
+            type="monotone"
+            dataKey="Sony"
+            stroke="#f59e0b"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            isAnimationActive
+            animationDuration={1200}
+            animationEasing="ease-out"
+          />
+          <Line
+            type="monotone"
+            dataKey="LG"
+            stroke="#ef4444"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            isAnimationActive
+            animationDuration={1200}
+            animationEasing="ease-out"
+          />
+          <Line
+            type="monotone"
+            dataKey="Forecast"
+            stroke="#475569"
+            strokeWidth={1}
+            strokeDasharray="4 4"
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
+            isAnimationActive
+            animationDuration={1200}
+            animationEasing="ease-out"
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>
