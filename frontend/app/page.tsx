@@ -9,6 +9,7 @@ import LiveTicker from "@/components/LiveTicker";
 import ChatPanel from "@/components/ChatPanel";
 import FlyoutCard from "@/components/FlyoutCard";
 import BQExplorer from "@/components/BQExplorer";
+import SellThroughChart from "@/components/SellThroughChart";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
@@ -632,6 +633,11 @@ export default function Home() {
             <div className={"text-[10px] mt-0.5 " + (kpi.color === "green" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
           </div>
         ))}
+      </div>
+
+      {/* 13-week sell-through trend chart */}
+      <div className="px-4 pt-2 pb-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+        <SellThroughChart />
       </div>
 
       <AlertTicker alerts={alerts} />
