@@ -57,16 +57,21 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
     if sku_id:
         params["sku_id"] = _safe_id(sku_id)
         sku_clause = "AND s.sku_id = @sku_id"
+    # Joins sku_master (m) so retailer/our price comes from the canonical
+    # source, not the snapshot row (which can be 0 or stale). All sanity
+    # bounds and gap calc are derived from m.our_price.
     sql = f"""
         SELECT
             s.sku_id,
-            s.sku_name,
-            CAST(s.retailer_price AS FLOAT64)   AS our_price,
+            m.sku_name,
+            CAST(m.our_price AS FLOAT64)        AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
-            CAST(s.price_gap_pct AS FLOAT64)    AS price_gap_pct,
+            ROUND((m.our_price - s.competitor_price) / NULLIF(m.our_price, 0) * 100, 1) AS price_gap_pct,
             IF(COALESCE(s.in_stock, TRUE), 'In', 'Out') AS stock_status,
             s.snapshot_time
         FROM `{PROJECT}.{DATASET}.competitor_price_snapshots` s
+        INNER JOIN `{PROJECT}.{DATASET}.sku_master` m
+                ON s.sku_id = m.sku_id
         WHERE s.snapshot_time = (
             SELECT MAX(snapshot_time)
             FROM `{PROJECT}.{DATASET}.competitor_price_snapshots`
@@ -74,13 +79,19 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
         {sku_clause}
           -- Sanity bounds: drop rows where SerpAPI returned a marketplace,
           -- bundle, or component listing that isn't a like-for-like compare.
-          -- Allowed market price band: 0.5x–1.5x of our price.
-          AND s.retailer_price > 0
+          -- Allowed market price band: 0.5x–1.5x of our price (from sku_master).
+          AND m.our_price > 0
           AND s.competitor_price > 0
-          AND s.competitor_price >= s.retailer_price * 0.5
-          AND s.competitor_price <= s.retailer_price * 1.5
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY s.sku_id ORDER BY s.competitor_price DESC) = 1
-        ORDER BY ABS(price_gap_pct) DESC
+          AND s.competitor_price >= m.our_price * 0.5
+          AND s.competitor_price <= m.our_price * 1.5
+        -- Pick the competitor row whose price is closest to ours — the most
+        -- realistic like-for-like compare, not just the highest-priced
+        -- listing returned by SerpAPI.
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY s.sku_id
+            ORDER BY ABS(s.competitor_price - m.our_price) ASC
+        ) = 1
+        ORDER BY ABS((m.our_price - s.competitor_price) / NULLIF(m.our_price, 0)) DESC
         LIMIT @row_limit
     """
     rows = _run_query(sql, params)
@@ -98,26 +109,35 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Di
     if sku_id:
         params["sku_id"] = _safe_id(sku_id)
         sku_clause = "AND s.sku_id = @sku_id"
+    # Mirrors get_competitive_pricing: join sku_master, use m.our_price as
+    # canonical retail, filter to like-for-like compares, pick closest match.
     sql = f"""
         SELECT
             s.sku_id,
-            s.sku_name,
-            CAST(s.retailer_price AS FLOAT64)   AS our_price,
+            m.sku_name,
+            CAST(m.our_price AS FLOAT64)        AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
-            ROUND(s.retailer_price - s.competitor_price, 2) AS price_gap_abs,
-            CAST(s.price_gap_pct AS FLOAT64)    AS price_gap_pct
+            ROUND(m.our_price - s.competitor_price, 2) AS price_gap_abs,
+            ROUND((m.our_price - s.competitor_price) / NULLIF(m.our_price, 0) * 100, 1) AS price_gap_pct
         FROM `{PROJECT}.{DATASET}.competitor_price_snapshots` s
+        INNER JOIN `{PROJECT}.{DATASET}.sku_master` m
+                ON s.sku_id = m.sku_id
         WHERE s.snapshot_time = (
             SELECT MAX(snapshot_time)
             FROM `{PROJECT}.{DATASET}.competitor_price_snapshots`
         )
-          AND s.price_gap_pct < 0
           {sku_clause}
-          AND s.retailer_price > 0
+          AND m.our_price > 0
           AND s.competitor_price > 0
-          AND s.competitor_price >= s.retailer_price * 0.5
-          AND s.competitor_price <= s.retailer_price * 1.5
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY s.sku_id ORDER BY s.competitor_price DESC) = 1
+          AND s.competitor_price >= m.our_price * 0.5
+          AND s.competitor_price <= m.our_price * 1.5
+          -- Margin opportunity = market is HIGHER than ours (we could raise).
+          -- price_gap_pct < 0 means ours below market.
+          AND s.competitor_price > m.our_price
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY s.sku_id
+            ORDER BY ABS(s.competitor_price - m.our_price) ASC
+        ) = 1
         ORDER BY price_gap_pct ASC
         LIMIT @row_limit
     """
