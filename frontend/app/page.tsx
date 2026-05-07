@@ -107,22 +107,21 @@ export default function Home() {
   const [agentStatus, setAgentStatus] = useState<Status>('idle');
   const [agentSteps, setAgentSteps] = useState<{step: AgentStep, content: string}[]>([]);
   const [agentError, setAgentError] = useState<string | null>(null);
-  const [lastAgentMessage, setLastAgentMessage] = useState('');
 
   const logEvent = (phase: string, message: string) => {
     // This is for frontend-side logging, not backend events
-    setAgentEvents((prev) => [{ run_id: "ui-local", timestamp: new Date().toISOString(), stage: phase, status: 'INFO', message: message }, ...prev].slice(0, 20));
+    setAgentEvents((prev) => [{ timestamp: new Date().toISOString(), stage: phase, status: 'INFO', message: message }, ...prev].slice(0, 20));
   };
 
   const mapBackendStageToAgentStep = (stage: string): AgentStep => {
     switch (stage) {
-      case 'SENSING': return 'think';
-      case 'FETCHING': return 'think';
-      case 'ENRICHING': return 'analyze'; // Map Enriching to Analyze
-      case 'PROCESSING': return 'analyze';
-      case 'analyze': return 'analyze';
-      case 'UPDATING': return 'act';
-      case 'respond': return 'respond';
+      case 'SENSING': return 'thinking';
+      case 'FETCHING': return 'thinking';
+      case 'ENRICHING': return 'analyzing'; // Map Enriching to Analyze
+      case 'PROCESSING': return 'analyzing';
+      case 'ANALYZING': return 'analyzing';
+      case 'UPDATING': return 'acting';
+      case 'RESPONDING': return 'responding';
       case 'COMPLETE': return 'done';
       case 'ERROR': return 'error';
       default: return 'idle';
@@ -721,7 +720,7 @@ export default function Home() {
             </div>
             {/* Pipeline Stages Grid (3 rows for better readability) */}
             <div className="grid grid-cols-3 gap-2 mb-3 text-xs font-medium">
-              {['SENSING', 'FETCHING', 'ENRICHING', 'PROCESSING', 'analyze', 'UPDATING', 'respond'].map((stage) => {
+              {['SENSING', 'FETCHING', 'ENRICHING', 'PROCESSING', 'ANALYZING', 'UPDATING', 'RESPONDING'].map((stage) => {
                 const stageEvent = agentEvents.find(e => e.stage === stage);
                 const stageStatus = stageEvent?.status || 'pending';
                 const isCurrent = latestEvent?.stage === stage;
@@ -822,26 +821,13 @@ export default function Home() {
             </div>
           </div>
           </FlyoutCard>
-          <FlyoutCard
-            title="Agentic Category AI"
-            subtitle="Multi-step · Real-time"
-            icon="⚡"
-            badge={
-              refreshing
-                ? <span style={{background:'#78350f',color:'#f59e0b',fontSize:'9px',fontWeight:600,padding:'1px 6px',borderRadius:'999px'}}>● Running</span>
-                : <span style={{background:'#166534',color:'#22c55e',fontSize:'9px',fontWeight:600,padding:'1px 6px',borderRadius:'999px'}}>● Complete</span>
-            }
-            preview={
-              <span style={{fontSize:'10px',color:'#94a3b8'}}>
-                {lastAgentMessage
-                  ? lastAgentMessage.slice(0,100) + '...'
-                  : 'Select a flow or ask any question'}
-              </span>
-            }
-            defaultWidth="w-full"
-          >
+          {/* ChatPanel renders directly (not inside FlyoutCard) so it's
+              always mounted. That's required for the sidebar's
+              cat-flow-prompt dispatch to reach it and for ChatPanel to
+              broadcast cat-chat-status events the Strategy Loop listens to. */}
+          <div className="min-h-0 min-w-0 overflow-hidden">
             <ChatPanel />
-          </FlyoutCard>
+          </div>
           <FlyoutCard
             title="Live Pricing Intelligence"
             subtitle={isSystemError ? "System Error" : "bigquery-live"}
@@ -1017,10 +1003,3 @@ export default function Home() {
     </div>
   );
 }
-
-  useEffect(() => {
-    const doneEvent = agentEvents.find((e) => e.stage === "COMPLETE" || e.status === "SUCCESS");
-    if (doneEvent?.message) {
-      setLastAgentMessage(doneEvent.message.slice(0, 200));
-    }
-  }, [agentEvents]);

@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 
 export type AgentStep = 'think' | 'act' | 'analyze' | 'respond' | 'respond_chunk' | 'done' | 'error';
-export type Status = 'idle' | 'think' | 'act' | 'analyze' | 'respond' | 'done' | 'error';
+export type Status = 'idle' | 'thinking' | 'acting' | 'analyzing' | 'responding' | 'done' | 'error';
 
 export function useAgentStream() {
   const [steps, setSteps] = useState<{step: AgentStep, content: string}[]>([]);
@@ -12,7 +12,7 @@ export function useAgentStream() {
 
   const sendMessage = useCallback(async (message: string, sessionId: string) => {
     setIsStreaming(true);
-    setStatus('think');
+    setStatus('thinking');
     setError(null);
     setSteps([]);
     setFinalResponse('');
@@ -35,31 +35,30 @@ export function useAgentStream() {
         if (done) break;
         
         const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        const lines = chunk.split('\n\n');
         
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (!data || data === '[DONE]') continue;
-          let event;
-          try {
-            event = JSON.parse(data);
-          } catch (_e) {
-            continue; // skip malformed chunk
-          }
-          if (!event) continue;
-
-          setSteps(prev => [...prev, event]);
-          if (event.step === 'respond_chunk') {
-            setFinalResponse(prev => prev + event.content);
-            setStatus('respond');
-          } else if (event.step === 'done') {
-            setStatus('done');
-          } else if (event.step === 'error') {
-            setStatus('error');
-            setError(event.content);
-          } else {
-            setStatus(event.step === 'think' ? 'think' : event.step === 'act' ? 'act' : 'analyze');
+          if (line.startsWith('data: ')) {
+            const raw = line.slice(6).trim();
+            if (!raw || raw === '[DONE]') continue;
+            let data: any;
+            try {
+              data = JSON.parse(raw);
+            } catch (_e) {
+              continue;
+            }
+            setSteps(prev => [...prev, data]);
+            if (data.step === 'respond_chunk') {
+              setFinalResponse(prev => prev + data.content);
+              setStatus('responding');
+            } else if (data.step === 'done') {
+              setStatus('done');
+            } else if (data.step === 'error') {
+              setStatus('error');
+              setError(data.content);
+            } else {
+              setStatus(data.step === 'think' ? 'thinking' : data.step === 'act' ? 'acting' : 'analyzing');
+            }
           }
         }
       }
@@ -73,4 +72,3 @@ export function useAgentStream() {
 
   return { steps, finalResponse, isStreaming, status, error, sendMessage };
 }
-
