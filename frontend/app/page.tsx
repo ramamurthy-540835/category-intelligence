@@ -757,29 +757,11 @@ export default function Home() {
           </FlyoutCard>
         </div>
         <div className="flex-1 min-w-0 h-full flex flex-col">
-          <FlyoutCard
-            title="Agentic Category AI"
-            subtitle="Multi-step reasoning · Real-time data"
-            icon="⚡"
-            badge={
-              currentRunId
-                ? <span className="text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-full bg-[#78350f] text-[#f59e0b]">● Running</span>
-                : <span className="text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-full bg-[#166534] text-[#22c55e]">● Complete</span>
-            }
-            preview={
-              <div className="text-[10px] leading-relaxed w-full">
-                <div className="text-slate-300 mb-0.5">
-                  {latestEvent ? `[${latestEvent.stage}] ${latestEvent.message}` : 'Click a sidebar flow or ask a question.'}
-                </div>
-                <div className="text-[#475569]">
-                  Click to open chat · Stream Think → Act → Analyze → Respond
-                </div>
-              </div>
-            }
-            defaultWidth="flex-1"
-          >
-            <ChatPanel />
-          </FlyoutCard>
+          {/* ChatPanel renders directly (not inside FlyoutCard) so it's
+              always mounted. That's required for the sidebar's
+              cat-flow-prompt dispatch to reach it and for ChatPanel to
+              broadcast cat-chat-status events the Strategy Loop listens to. */}
+          <ChatPanel />
         </div>
         <div className="flex-1 min-w-0 flex flex-col gap-3 h-full overflow-y-auto">
           <FlyoutCard
