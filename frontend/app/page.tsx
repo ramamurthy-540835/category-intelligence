@@ -576,33 +576,33 @@ export default function Home() {
       <header className="px-4 h-14 flex items-center justify-between bg-bby-blue">
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-bby-yellow text-bby-blue font-extrabold text-[10px] leading-tight text-center">BEST<br/>BUY</span>
-          <span className="text-white font-semibold text-base">Category Intelligence</span>
-          <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider text-bby-yellow border border-bby-yellow/30">POWERED BY ADEPT AI</span>
-          <span className="hidden md:inline text-[12px] text-white/70 ml-3">Home Theater <span className="text-white/40">›</span> Q4 2024 Review</span>
+          <span className="text-white font-semibold text-[13px]">Category Intelligence</span>
+          <span className="px-2 py-0.5 rounded text-[9px] font-bold tracking-wider text-bby-yellow border border-bby-yellow/30">POWERED BY ADEPT AI</span>
+          <span className="hidden md:inline text-[11px] text-white/70 ml-3">Home Theater <span className="text-white/40">›</span> Q4 2024 Review</span>
         </div>
         <div className="flex items-center gap-2 text-[12px]">
           <button
             type="button"
             onClick={() => setBqOpen(true)}
-            className="px-3 py-1.5 rounded border border-white/30 text-white hover:bg-white/10 flex items-center gap-1"
+            className="px-2.5 py-1 rounded border border-white/30 text-white hover:bg-white/10 flex items-center gap-1 text-[11px]"
             title="Open BigQuery Explorer"
           >
             🗄️ Data
           </button>
-          <button className="px-3 py-1.5 rounded border border-white/30 text-white hover:bg-white/10" type="button">Export PDF</button>
-          <button className="px-3 py-1.5 rounded bg-bby-yellow text-bby-blue font-semibold hover:bg-yellow-300" type="button">Export PPT</button>
+          <button className="px-2.5 py-1 rounded border border-white/30 text-white hover:bg-white/10 text-[11px]" type="button">Export PDF</button>
+          <button className="px-2.5 py-1 rounded bg-bby-yellow text-bby-blue font-semibold hover:bg-yellow-300 text-[11px]" type="button">Export PPT</button>
           <span className="ml-2 inline-flex items-center justify-center w-8 h-8 rounded-full bg-bby-accent text-white text-xs font-semibold">AC</span>
         </div>
       </header>
 
       {/* Top navigation tabs — Category / Promotions / Loyalty / Returns */}
-      <nav className="px-6 flex items-center gap-1 text-sm bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+      <nav className="px-6 flex items-center gap-1 text-[12px] bg-bby-dark border-b border-[var(--bby-border-subtle)]">
         {topTabs.map((t) => (
           <button
             key={t.id}
             type="button"
             className={
-              "px-4 py-2 -mb-px border-b-2 transition-colors " +
+              "px-3 py-1.5 -mb-px border-b-2 transition-colors text-[12px] " +
               (t.active
                 ? "border-bby-accent text-white font-semibold"
                 : "border-transparent text-slate-400 hover:text-slate-200")
@@ -653,7 +653,7 @@ export default function Home() {
       {/* 3-column row of operational panels — equal-width grid on desktop,
           stacked single column on mobile so each card is full-width and
           comfortably tappable. Outer <main> is the only scroll container. */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-4 pb-4 sm:min-h-[480px]">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-4 pb-4 sm:min-h-[480px] overflow-hidden">
           <FlyoutCard
             title="Agents in Action"
             subtitle="Live execution monitor"
@@ -825,7 +825,7 @@ export default function Home() {
               always mounted. That's required for the sidebar's
               cat-flow-prompt dispatch to reach it and for ChatPanel to
               broadcast cat-chat-status events the Strategy Loop listens to. */}
-          <div className="min-h-0">
+          <div className="min-h-0 min-w-0 overflow-hidden">
             <ChatPanel />
           </div>
           <FlyoutCard

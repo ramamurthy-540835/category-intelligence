@@ -7,7 +7,10 @@ interface AgentResponseProps {
 
 export default function AgentResponse({ content }: AgentResponseProps) {
   return (
-    <div className="agent-md">
+    <div
+      className="agent-md"
+      style={{ overflowWrap: "break-word", wordBreak: "break-word" }}
+    >
       <ReactMarkdown
         components={{
 
@@ -63,7 +66,10 @@ export default function AgentResponse({ content }: AgentResponseProps) {
             const isBlock = className?.includes("language-");
             if (isBlock) {
               return (
-                <pre className="bg-[#0d1117] border border-[#2d3748] rounded p-2.5 overflow-x-auto my-1.5">
+                <pre
+                  className="bg-[#0d1117] border border-[#2d3748] rounded p-2.5 overflow-x-auto my-1.5"
+                  style={{ maxWidth: "100%" }}
+                >
                   <code className="text-[#22c55e] text-[9px] font-mono leading-relaxed">{children}</code>
                 </pre>
               );

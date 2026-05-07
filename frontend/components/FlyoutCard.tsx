@@ -33,7 +33,7 @@ export default function FlyoutCard({
     <>
       {/* ── COLLAPSED CARD ─────────────────────────────── */}
       <div
-        className={`${defaultWidth} flex flex-col bg-[#0f141c] border border-[#1e2532] rounded-lg overflow-visible relative group`}
+        className={`${defaultWidth} min-w-0 flex flex-col bg-[#0f141c] border border-[#1e2532] rounded-lg overflow-visible relative group`}
         onMouseEnter={onEnter}
         onMouseLeave={onLeave}
       >
@@ -127,7 +127,10 @@ export default function FlyoutCard({
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 text-[12px]">
+            <div
+              className="flex-1 overflow-y-auto overflow-x-hidden p-4 text-[12px]"
+              style={{ overflowWrap: "break-word", wordBreak: "break-word" }}
+            >
               {children}
             </div>
 
