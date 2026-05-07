@@ -58,11 +58,8 @@ export default function FlyoutCard({
         </div>
 
         {/* Mini preview — ONLY this renders in collapsed state, no full content */}
-        <div
-          onClick={open}
-          className="px-2.5 py-2 cursor-pointer flex items-start"
-          style={{ height: "48px", overflow: "hidden" }}
-        >
+        <div style={{height:'48px',overflow:'hidden'}}
+             onClick={open} className="px-2.5 py-2 cursor-pointer">
           {preview
             ? <div className="text-[9px] text-[#64748b] leading-relaxed line-clamp-3 w-full">{preview}</div>
             : <div className="text-[9px] text-[#475569] italic">Hover to preview · click to expand</div>
