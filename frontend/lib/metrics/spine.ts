@@ -12,3 +12,4 @@ export const METRIC_SPINE = {
   attach_rate: "companion_units / primary_units",
   gen_z_affinity_score: "visits*0.25 + conversion*0.25 + repeat*0.2 + social*0.15 + bopis*0.15"
 } as const;
+

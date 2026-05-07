@@ -36,3 +36,4 @@ export default function KPICard({ label, value, metric, delta, trend, status, up
     </div>
   );
 }
+

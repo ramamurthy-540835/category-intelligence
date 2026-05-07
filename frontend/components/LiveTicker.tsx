@@ -38,3 +38,4 @@ export default function LiveTicker({ alerts }: { alerts: Alert[] }) {
     </div>
   );
 }
+

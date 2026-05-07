@@ -15,3 +15,4 @@ export async function GET() {
     return NextResponse.json({ status: 'error', error: String(e), backend_url: getBackendUrl() }, { status: 502 });
   }
 }
+

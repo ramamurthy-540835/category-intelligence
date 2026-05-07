@@ -64,7 +64,7 @@ export function ChatInterface() {
         </div>
         <div className="grid grid-cols-4 gap-1 text-[11px]">
           {["think", "act", "analyze", "respond"].map((phase) => {
-            const active = status.startsWith(phase) || (phase === "think" && status === "thinking") || (phase === "act" && status === "acting") || (phase === "analyze" && status === "analyzing") || (phase === "respond" && status === "responding");
+            const active = status.startsWith(phase) || (phase === "think" && status === "think") || (phase === "act" && status === "act") || (phase === "analyze" && status === "analyze") || (phase === "respond" && status === "respond");
             return (
               <div key={phase} className={`rounded px-2 py-1 text-center border ${active ? "bg-blue-900 border-blue-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}>
                 {phase}
@@ -132,3 +132,4 @@ export function ChatInterface() {
     </div>
   );
 }
+

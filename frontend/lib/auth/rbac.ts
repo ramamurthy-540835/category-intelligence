@@ -11,3 +11,4 @@ export function can(role: UserRole | string, permission: Permission): boolean {
   const perms = ROLE_PERMISSIONS[role as UserRole];
   return perms ? perms.has(permission) : false;
 }
+

@@ -244,3 +244,4 @@ export default function SellThroughChart({ flowKey, onWeekClick }: Props) {
     </div>
   );
 }
+

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import RootErrorBoundary from "@/components/RootErrorBoundary";
 import "./globals.css";
 
 const inter = Inter({
@@ -21,7 +22,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen bg-[#0d1117] text-slate-200">{children}</body>
+      <body className="min-h-screen bg-[#0d1117] text-slate-200">
+        <RootErrorBoundary>{children}</RootErrorBoundary>
+      </body>
     </html>
   );
 }
+

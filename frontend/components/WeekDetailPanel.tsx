@@ -150,3 +150,4 @@ export default function WeekDetailPanel({ row, onClose }: Props) {
     </div>
   );
 }
+

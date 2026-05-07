@@ -21,3 +21,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: String(e), backend_url: getBackendUrl() }, { status: 502 });
   }
 }
+

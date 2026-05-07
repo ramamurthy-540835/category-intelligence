@@ -17,3 +17,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ run_id: runId, events: [], error: String(e), backend_url: getBackendUrl() }, { status: 502 });
   }
 }
+

@@ -52,3 +52,4 @@ export default function AlertTicker({ alerts }: Props) {
     </div>
   );
 }
+

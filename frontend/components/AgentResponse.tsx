@@ -111,3 +111,4 @@ export default function AgentResponse({ content }: AgentResponseProps) {
     </div>
   );
 }
+
