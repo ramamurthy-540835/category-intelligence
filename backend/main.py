@@ -627,3 +627,150 @@ async def get_agent_events(run_id: str):
     except Exception as e:
         logger.error(f"Failed to fetch agent events for run_id={run_id}: {e}")
         return {"run_id": run_id, "events": [], "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BigQuery Explorer endpoints
+#
+# /bq/query   — read-only ad-hoc SELECT runner used by the UI Data Explorer.
+# /bq/update  — narrow allowlist UPDATE for sku_master.our_price / sku_name.
+#
+# Both routes intentionally do NOT use bq_client_instance.query() because
+# they need raw schema access (column names, byte counts) that the wrapper
+# doesn't expose.
+# ─────────────────────────────────────────────────────────────────────────────
+import re as _bq_re
+from pydantic import BaseModel as _BqBaseModel
+
+
+class BQQueryRequest(_BqBaseModel):
+    sql: str
+    max_rows: int = 100
+
+
+class BQUpdateRequest(_BqBaseModel):
+    table: str
+    sku_id: str
+    field: str
+    value: str
+
+
+_BQ_BLOCKED = ("DELETE", "UPDATE", "INSERT", "DROP", "CREATE", "TRUNCATE", "MERGE", "ALTER", "GRANT", "REVOKE", "CALL")
+
+
+@app.post("/bq/query")
+async def bq_query(req: BQQueryRequest):
+    """Run an ad-hoc read-only SELECT. Strict allowlist on statement type."""
+    sql_raw = (req.sql or "").strip()
+    if not sql_raw:
+        raise HTTPException(status_code=400, detail="Empty SQL")
+
+    upper = sql_raw.upper()
+    if not (upper.startswith("SELECT") or upper.startswith("WITH ")):
+        raise HTTPException(status_code=400, detail="Only SELECT (or WITH … SELECT) queries are allowed.")
+
+    # Token-boundary check so 'DELETE' inside a string literal doesn't false-positive,
+    # and 'updated_at' (column name) doesn't trip 'UPDATE'.
+    for kw in _BQ_BLOCKED:
+        if _bq_re.search(rf"\b{kw}\b", upper):
+            raise HTTPException(status_code=400, detail=f"Keyword {kw} not allowed in /bq/query.")
+
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=EFFECTIVE_PROJECT_ID)
+        # Defensive max_rows cap — even a SELECT can be huge.
+        max_rows = max(1, min(int(req.max_rows or 100), 1000))
+        job = client.query(sql_raw, job_config=bigquery.QueryJobConfig(use_query_cache=True))
+        rows_iter = job.result(max_results=max_rows)
+        columns = [field.name for field in rows_iter.schema]
+
+        out_rows = []
+        for row in rows_iter:
+            d = {}
+            for col in columns:
+                v = row[col]
+                if v is None:
+                    d[col] = None
+                elif isinstance(v, (str, int, float, bool)):
+                    d[col] = v
+                else:
+                    d[col] = str(v)
+            out_rows.append(d)
+
+        return {
+            "columns": columns,
+            "rows": out_rows,
+            "total_rows": len(out_rows),
+            "bytes_processed": job.total_bytes_processed,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"/bq/query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"BigQuery error: {e}")
+
+
+@app.post("/bq/update")
+async def bq_update(req: BQUpdateRequest):
+    """Allowlisted UPDATE on sku_master. Only our_price and sku_name. Parameterized."""
+    if req.table != "sku_master":
+        raise HTTPException(status_code=400, detail="Only sku_master updates are allowed.")
+    if req.field not in ("our_price", "sku_name"):
+        raise HTTPException(status_code=400, detail="Only our_price and sku_name can be updated.")
+    if not _bq_re.match(r"^[A-Za-z0-9._\-]+$", req.sku_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid sku_id format.")
+
+    table_ref = f"{EFFECTIVE_PROJECT_ID}.{BIGQUERY_DATASET}.sku_master"
+
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=EFFECTIVE_PROJECT_ID)
+
+        if req.field == "our_price":
+            try:
+                num_value = float(req.value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="our_price must be a number.")
+            if num_value < 0 or num_value > 1_000_000:
+                raise HTTPException(status_code=400, detail="our_price out of range.")
+            sql = f"""
+                UPDATE `{table_ref}`
+                SET our_price = @value
+                WHERE sku_id = @sku_id
+            """
+            params = [
+                bigquery.ScalarQueryParameter("value", "FLOAT64", num_value),
+                bigquery.ScalarQueryParameter("sku_id", "STRING", req.sku_id),
+            ]
+        else:
+            str_value = str(req.value or "")
+            if len(str_value) > 200:
+                raise HTTPException(status_code=400, detail="sku_name too long.")
+            sql = f"""
+                UPDATE `{table_ref}`
+                SET sku_name = @value
+                WHERE sku_id = @sku_id
+            """
+            params = [
+                bigquery.ScalarQueryParameter("value", "STRING", str_value),
+                bigquery.ScalarQueryParameter("sku_id", "STRING", req.sku_id),
+            ]
+
+        job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+        job.result()
+        return {
+            "success": True,
+            "sku_id": req.sku_id,
+            "field": req.field,
+            "value": req.value,
+            "rows_affected": job.num_dml_affected_rows,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"/bq/update failed: {e}")
+        # BigQuery often rejects UPDATE on streaming-buffer rows — surface that clearly.
+        msg = str(e)
+        if "streaming buffer" in msg.lower():
+            raise HTTPException(status_code=409, detail="Row is in BigQuery streaming buffer — try again in ~30 min.")
+        raise HTTPException(status_code=500, detail=f"BigQuery update error: {msg}")

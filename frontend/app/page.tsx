@@ -8,6 +8,7 @@ import DemoFlowsSidebar from "@/components/DemoFlowsSidebar";
 import LiveTicker from "@/components/LiveTicker";
 import ChatPanel from "@/components/ChatPanel";
 import FlyoutCard from "@/components/FlyoutCard";
+import BQExplorer from "@/components/BQExplorer";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
@@ -495,6 +496,14 @@ export default function Home() {
   // Quick Actions and demo flows now live in <DemoFlowsSidebar />, so the
   // inline panel that used to sit above AgentControlCenter has been removed.
 
+  const [bqOpen, setBqOpen] = useState(false);
+  useEffect(() => {
+    if (!bqOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBqOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bqOpen]);
+
   const topTabs = [
     { id: "category",   icon: "📊", label: "Category",   active: true  },
     { id: "promotions", icon: "📈", label: "Promotions", active: false },
@@ -516,6 +525,14 @@ export default function Home() {
           <span className="hidden md:inline text-[12px] text-white/70 ml-3">Home Theater <span className="text-white/40">›</span> Q4 2024 Review</span>
         </div>
         <div className="flex items-center gap-2 text-[12px]">
+          <button
+            type="button"
+            onClick={() => setBqOpen(true)}
+            className="px-3 py-1.5 rounded border border-white/30 text-white hover:bg-white/10 flex items-center gap-1"
+            title="Open BigQuery Explorer"
+          >
+            🗄️ Data
+          </button>
           <button className="px-3 py-1.5 rounded border border-white/30 text-white hover:bg-white/10" type="button">Export PDF</button>
           <button className="px-3 py-1.5 rounded bg-bby-yellow text-bby-blue font-semibold hover:bg-yellow-300" type="button">Export PPT</button>
           <span className="ml-2 inline-flex items-center justify-center w-8 h-8 rounded-full bg-bby-accent text-white text-xs font-semibold">AC</span>
@@ -874,6 +891,35 @@ export default function Home() {
         </div>
       </div>
       </main>
+      {/* BigQuery Explorer modal — full-screen overlay; Esc / click-outside / X to close */}
+      {bqOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-stretch justify-center"
+          style={{ background: "rgba(0,0,0,0.7)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setBqOpen(false); }}
+        >
+          <div
+            className="m-6 w-full max-w-6xl max-h-[92vh] flex flex-col rounded-lg border border-[#2d3748] overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex-1 min-h-0 flex flex-col bg-[#0d1117]">
+              <BQExplorer />
+            </div>
+            <div className="px-4 py-2 border-t border-[#1e2532] bg-[#0d1117] flex items-center justify-between flex-shrink-0">
+              <span className="text-[11px] text-[#475569]">
+                Press <kbd className="bg-[#1e2532] text-[#94a3b8] px-1 py-0.5 rounded text-[10px] font-mono">Esc</kbd> or click outside to close
+              </span>
+              <button
+                type="button"
+                onClick={() => setBqOpen(false)}
+                className="text-[11px] text-[#94a3b8] hover:text-white px-2 py-1 rounded border border-[#2d3748]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <AgentControlCenter
         status={isSystemError ? 'error' : agentStatus}
         steps={isSystemError ? [{ step: 'error', content: 'System authentication error. Agent cannot run.' }] : agentSteps}
