@@ -1,3 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ───── Best Buy / Adept design tokens ───── */
+:root {
+  --bby-page-bg:        #0d1117;
+  --bby-surface-1:      #161b22;
+  --bby-surface-2:      #1c2230;
+  --bby-surface-3:      #21283a;
+  --bby-border:         #2d3748;
+  --bby-border-subtle:  #1e2532;
+
+  --bby-header-bg:      #003087;
+  --bby-header-text:    #ffffff;
+  --bby-logo-yellow:    #ffe000;
+
+  --bby-tab-active-bg:        #1e3a5f;
+  --bby-tab-active-border:    #3b82f6;
+  --bby-tab-text:             #94a3b8;
+  --bby-tab-active-text:      #ffffff;
+
+  --bby-ticker-bg:      #1a1a2e;
+  --bby-ticker-dot-red: #ef4444;
+  --bby-ticker-text:    #e2e8f0;
+  --bby-live-badge-bg:  #dc2626;
+
+  --bby-kpi-bg:         #1c2230;
+  --bby-kpi-border:     #2d3748;
+  --bby-kpi-label:      #64748b;
+  --bby-kpi-up:         #22c55e;
+  --bby-kpi-down:       #ef4444;
+
+  --bby-sidebar-bg:           #0d1117;
+  --bby-sidebar-active-bg:    #1e3a5f;
+  --bby-sidebar-active-border:#3b82f6;
+  --bby-sidebar-active-text:  #60a5fa;
+  --bby-sidebar-text:         #94a3b8;
+  --bby-sidebar-label:        #475569;
+  --bby-alert-badge-bg:       #dc2626;
+
+  --bby-acc-bg:         #0f1923;
+  --bby-acc-header-bg:  #003087;
+  --bby-acc-border:     #1e2d3d;
+
+  --bby-flag-price:    #f59e0b;
+  --bby-flag-expedite: #ef4444;
+  --bby-flag-ad:       #8b5cf6;
+  --bby-flag-monitor:  #64748b;
+  --bby-flag-attach:   #06b6d4;
+  --bby-flag-clear:    #f97316;
+}
+
+html, body {
+  background: var(--bby-page-bg);
+  color: #e2e8f0;
+  font-family: var(--font-inter), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}

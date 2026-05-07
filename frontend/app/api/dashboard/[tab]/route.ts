@@ -8,7 +8,7 @@ function getBackendUrl() {
   return (
     process.env.BACKEND_URL ||
     process.env.NEXT_PUBLIC_API_BASE_URL ||
-    'http://localhost:8001'
+    'http://10.100.15.44:8005'
   );
 }
 

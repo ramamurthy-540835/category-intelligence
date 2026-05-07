@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAgentStream, AgentStep, Status } from "@/lib/sse/useSSE";
 import ReactMarkdown from 'react-markdown';
 
@@ -30,6 +30,20 @@ export function ChatInterface() {
     setMessage(flowQ); // Set the message in the input field
     handleSendMessage(flowQ); // Immediately send the message
   };
+
+  // Allow the far-left DemoFlowsSidebar (or any other sender) to inject a
+  // chat prompt by dispatching `cat-flow-prompt` on window with detail = text.
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (typeof detail === "string" && detail.trim()) {
+        handleDemoFlowClick(detail);
+      }
+    };
+    window.addEventListener("cat-flow-prompt", onPrompt);
+    return () => window.removeEventListener("cat-flow-prompt", onPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming]);
 
   const markdownComponents = {
     h1: ({node, ...props}) => <h1 className="text-yellow-400 font-bold text-xl mb-1.5" {...props} />,

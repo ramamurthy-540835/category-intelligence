@@ -14,22 +14,24 @@ from data.external_feeds import CompetitorPriceFeed, EventStage # Import EventSt
 from data.bigquery_client import BigQueryClient, bq_client_instance # Import the global instance
 
 # --- Environment Loading ---
-# Load environment variables from repo-level .env.local (preferred) and backend-local fallback.
-# This ensures that even if the script is run from backend/, the root .env.local is loaded.
+# Single source of truth is the repo-root .env.local. backend/.env.local is
+# treated as an *override* only — never as a duplicate that can clobber the
+# root file with stale values. Process env (already exported by start.sh)
+# always wins over both.
 BACKEND_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BACKEND_DIR.parent
 
-# Load .env.local from the repository root first
 env_path_root = REPO_ROOT / ".env.local"
 if env_path_root.exists():
-    load_dotenv(dotenv_path=env_path_root, override=True)
+    # override=False so anything already in os.environ (e.g. exported by
+    # start.sh) is respected.
+    load_dotenv(dotenv_path=env_path_root, override=False)
     print(f"Loaded environment variables from: {env_path_root}")
 
-# Then load .env.local from the backend directory as a fallback or for local overrides
 env_path_backend = BACKEND_DIR / ".env.local"
 if env_path_backend.exists():
-    load_dotenv(dotenv_path=env_path_backend, override=True)
-    print(f"Loaded environment variables from: {env_path_backend}")
+    load_dotenv(dotenv_path=env_path_backend, override=False)
+    print(f"Loaded environment variables from: {env_path_backend} (overrides only)")
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO) # Basic config for logging
@@ -371,8 +373,8 @@ async def get_latest_competitor_prices():
         # SQL to get the latest timestamp and then all rows for that timestamp
         sql = f"""
             SELECT *
-            FROM `{feed.full_table_id}`
-            WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `{feed.full_table_id}`)
+            FROM `{feed.FULL_TABLE_ID}`
+            WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `{feed.FULL_TABLE_ID}`)
             ORDER BY sku_id
         """
         
@@ -429,25 +431,41 @@ async def dashboard(
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=sku_master_table))
 
         # BigQuery-first overview for scale, with SerpAPI fallback.
+        # QUALIFY collapses any duplicate sku_id rows that may exist within a single
+        # snapshot, so the UI never renders the same SKU twice.
         sql = f"""
             SELECT
               sku_id,
-              sku_name AS name,
-              CAST(retailer_price AS FLOAT64) AS our_price,
-              CAST(competitor_price AS FLOAT64) AS competitor_price,
-              CAST(price_gap_pct AS FLOAT64) AS price_gap_pct,
-              CAST(COALESCE(in_stock, TRUE) AS BOOL) AS in_stock,
+              name,
+              our_price,
+              competitor_price,
+              price_gap_pct,
+              in_stock,
               snapshot_time
-            FROM `{snapshots_table}`
-            WHERE snapshot_time = (
-              SELECT MAX(snapshot_time)
+            FROM (
+              SELECT
+                sku_id,
+                sku_name AS name,
+                CAST(retailer_price AS FLOAT64) AS our_price,
+                CAST(competitor_price AS FLOAT64) AS competitor_price,
+                CAST(price_gap_pct AS FLOAT64) AS price_gap_pct,
+                CAST(COALESCE(in_stock, TRUE) AS BOOL) AS in_stock,
+                snapshot_time
               FROM `{snapshots_table}`
+              WHERE snapshot_time = (
+                SELECT MAX(snapshot_time)
+                FROM `{snapshots_table}`
+              )
+              QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY sku_id
+                ORDER BY CAST(competitor_price AS FLOAT64) DESC
+              ) = 1
             )
-              AND (@q = '' OR LOWER(sku_id) LIKE LOWER(CONCAT('%', @q, '%')) OR LOWER(sku_name) LIKE LOWER(CONCAT('%', @q, '%')))
+            WHERE (@q = '' OR LOWER(sku_id) LIKE LOWER(CONCAT('%', @q, '%')) OR LOWER(name) LIKE LOWER(CONCAT('%', @q, '%')))
               AND (
                 @stock = 'all' OR
-                (@stock = 'in' AND COALESCE(in_stock, TRUE) = TRUE) OR
-                (@stock = 'out' AND COALESCE(in_stock, TRUE) = FALSE)
+                (@stock = 'in' AND in_stock = TRUE) OR
+                (@stock = 'out' AND in_stock = FALSE)
               )
             ORDER BY ABS(price_gap_pct) DESC
             LIMIT @limit OFFSET @offset

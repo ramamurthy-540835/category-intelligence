@@ -1,5 +1,26 @@
 # Changes Log
 
+## Validation Snapshot (2026-05-07)
+
+QA review of external scan flow surfaced and fixed three issues:
+
+- **External SerpAPI rows now persist to BigQuery.** `external_feeds.fetch_live_snapshot`
+  no longer drops `EXT-*` expansion rows before insert. Real Google Shopping prices
+  for the seed-query candidates land in `competitor_price_snapshots` alongside
+  catalog rows.
+- **No duplicate scans / no duplicate UI rows.** Expansion is capped at one row
+  per unique `EXPANSION_SEED_QUERIES` entry and uses stable slugged IDs
+  (`EXT-sony-oled-tv-65-inch`). A within-run dedup pass collapses any repeat
+  `sku_id` to the row with the highest `competitor_price`, and the
+  `/dashboard/overview` SQL adds `QUALIFY ROW_NUMBER() PARTITION BY sku_id`
+  so the UI always renders one row per SKU even if duplicates leak in.
+- **`/api/feeds/prices/latest` proxy added** in the frontend so the
+  `page.tsx` empty-state fallback no longer 404s. Backend `feed.full_table_id`
+  reference corrected to `feed.FULL_TABLE_ID`.
+
+Stale `🔴 NOT STARTED` flags on `TASK_15`, `TASK_24`, `TASK_26`, `TASK_30`
+flipped to `✅ DONE` to match what is on disk.
+
 ## Latest Delivered (Commit: 8cec927)
 
 - Enabled BigQuery live overview flow.

@@ -198,8 +198,17 @@ class CompetitorPriceFeed:
                     data = await response.json()
 
                 if "error" in data:
-                    log.error(f"SerpApi error for SKU {sku_id}: {data['error']}")
-                    self._log_event(EventStage.ENRICHING, "ERROR", f"SerpApi error for SKU {sku_id}: {data['error']}", {"error_type": "SERPAPI_ERROR", "fix": "Check SERPAPI_KEY and query."})
+                    # SerpAPI returning {"error": ...} for one SKU usually means "no
+                    # match" (SKU title too generic), not a system failure. Log it
+                    # as WARNING so the per-SKU miss doesn't paint the ENR pipeline
+                    # stage red when the rest of the run succeeded.
+                    log.warning(f"SerpApi miss for SKU {sku_id}: {data['error']}")
+                    self._log_event(
+                        EventStage.ENRICHING,
+                        "WARNING",
+                        f"SerpApi miss for SKU {sku_id}: {data['error']}",
+                        {"error_type": "SERPAPI_MISS", "fix": "SKU name may be too generic for Google Shopping."},
+                    )
                     return None
 
                 # SerpApi payload shape varies by engine/account and can return either
@@ -250,43 +259,184 @@ class CompetitorPriceFeed:
             self._log_event(EventStage.ENRICHING, "ERROR", f"Unexpected error fetching price for SKU {sku.get('sku_id')}: {e}", {"error_type": "UNEXPECTED_ERROR"})
             return None
 
+    async def fetch_top_products(
+        self,
+        session: aiohttp.ClientSession,
+        query: str,
+        top_n: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Live Google Shopping discovery for a single query.
+
+        Returns up to ``top_n`` real products from SerpAPI's google_shopping
+        engine. Each product carries a stable ``GS-<product_id>`` SKU id so
+        repeat scans update the same row instead of creating new ones.
+        """
+        if not query:
+            return []
+        params = {
+            "engine": "google_shopping",
+            "api_key": SERPAPI_KEY,
+            "q": query,
+            "hl": "en",
+            "gl": "us",
+            "device": "desktop",
+            "num": max(1, top_n),
+        }
+        try:
+            async with session.get(self.SERPAPI_URL, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+
+            if "error" in data:
+                log.warning(f"SerpApi miss for discovery query '{query}': {data['error']}")
+                self._log_event(
+                    EventStage.ENRICHING,
+                    "WARNING",
+                    f"SerpApi miss during discovery for '{query}': {data['error']}",
+                    {"error_type": "SERPAPI_MISS", "fix": "Seed query may be too generic for Google Shopping."},
+                )
+                return []
+
+            products = data.get("products") or data.get("shopping_results") or []
+            if not isinstance(products, list):
+                return []
+
+            now_iso = datetime.datetime.now().isoformat()
+            rows: List[Dict[str, Any]] = []
+            for p in products[:top_n]:
+                if not isinstance(p, dict):
+                    continue
+                product_id = str(p.get("product_id") or "").strip()
+                if not product_id:
+                    # Fall back to a stable hash of link+title when SerpAPI omits id.
+                    fallback = (p.get("link") or p.get("title") or "").strip()
+                    if not fallback:
+                        continue
+                    product_id = re.sub(r"[^A-Za-z0-9]+", "", fallback)[:32]
+                title = (p.get("title") or "").strip()
+                if not title:
+                    continue
+
+                price_str = p.get("price")
+                if not price_str and isinstance(p.get("extracted_price"), (int, float)):
+                    price_str = str(p.get("extracted_price"))
+                competitor_price = 0.0
+                if price_str:
+                    cleaned = re.sub(r"[^\d.]", "", str(price_str))
+                    try:
+                        competitor_price = float(cleaned) if cleaned else 0.0
+                    except ValueError:
+                        competitor_price = 0.0
+
+                rows.append({
+                    "sku_id": f"GS-{product_id}",
+                    "sku_name": title,
+                    "retailer_price": 0.0,
+                    "competitor_price": competitor_price,
+                    "price_gap_pct": 0.0,
+                    "competitor_name": p.get("source") or self.COMPETITOR_NAME,
+                    "search_query_used": query,
+                    "product_url": p.get("link"),
+                    "image_url": p.get("thumbnail") or p.get("image"),
+                    "in_stock": True,
+                    "last_checked": now_iso,
+                })
+            return rows
+        except aiohttp.ClientError as e:
+            log.error(f"HTTP error during discovery for '{query}': {e}")
+            err_msg = str(e)
+            error_type = (
+                "SERPAPI_CONNECTIVITY_ERROR"
+                if ("Name or service not known" in err_msg
+                    or "Temporary failure in name resolution" in err_msg
+                    or "Cannot connect" in err_msg)
+                else "HTTP_ERROR"
+            )
+            fix = (
+                "Check DNS/network egress to serpapi.com from backend host."
+                if error_type == "SERPAPI_CONNECTIVITY_ERROR"
+                else "Check network connectivity and SerpAPI endpoint."
+            )
+            self._log_event(
+                EventStage.ENRICHING,
+                "ERROR",
+                f"Discovery HTTP error for '{query}': {e}",
+                {"error_type": error_type, "fix": fix},
+            )
+            return []
+        except Exception as e:
+            log.error(f"Unexpected discovery error for '{query}': {e}")
+            self._log_event(
+                EventStage.ENRICHING,
+                "ERROR",
+                f"Unexpected discovery error for '{query}': {e}",
+                {"error_type": "UNEXPECTED_ERROR"},
+            )
+            return []
+
     async def fetch_live_snapshot(self, limit: int = 500) -> Dict[str, Any]:
         """Fetches live prices for multiple SKUs and returns a snapshot."""
         self._log_event(EventStage.FETCHING, "RUNNING", f"Starting live snapshot fetch with limit {limit}", {"requested_limit": limit})
-        skus_to_track = await self.fetch_skus_to_track(limit=limit)
-        if len(skus_to_track) < limit:
-            needed = limit - len(skus_to_track)
-            expanded = []
-            for i in range(needed):
-                q = self.EXPANSION_SEED_QUERIES[i % len(self.EXPANSION_SEED_QUERIES)]
-                expanded.append({
-                    "sku_id": f"EXT-{i+1:04d}",
-                    "sku_name": q,
-                    "retailer_price": 0.0,
-                    "is_active": True,
-                })
-            skus_to_track.extend(expanded)
-            self._log_event(
-                EventStage.FETCHING,
-                "RUNNING",
-                f"Expanded scan with {needed} external query candidates to meet target {limit}.",
-                {"requested_limit": limit, "active_skus": len(skus_to_track)},
-            )
-        if not skus_to_track:
+        catalog_skus = await self.fetch_skus_to_track(limit=limit)
+        catalog_count = len(catalog_skus)
+        external_budget = max(0, limit - catalog_count)
+
+        rows_to_write: List[Dict[str, Any]] = []
+
+        async with aiohttp.ClientSession() as session:
+            # 1) Catalog flow — for each known SKU in sku_master, ask SerpAPI for the
+            #    current Google Shopping price. Real per-SKU price refresh.
+            if catalog_skus:
+                self._log_event(
+                    EventStage.ENRICHING,
+                    "RUNNING",
+                    f"Refreshing competitor prices for {catalog_count} catalog SKUs via SerpAPI.",
+                )
+                catalog_results = await asyncio.gather(
+                    *[self.fetch_price(session, sku) for sku in catalog_skus]
+                )
+                for r in catalog_results:
+                    if r and r.get("sku_id"):
+                        rows_to_write.append(r)
+
+            # 2) Discovery flow — pull real top-N products from Google Shopping for
+            #    each seed category. Each product becomes a row keyed by its real
+            #    Google product_id (GS-<product_id>) so reruns update in place.
+            discovered_rows: List[Dict[str, Any]] = []
+            if external_budget > 0 and self.EXPANSION_SEED_QUERIES:
+                queries = list(self.EXPANSION_SEED_QUERIES)
+                top_n_per_query = max(1, -(-external_budget // len(queries)))  # ceil
+                self._log_event(
+                    EventStage.ENRICHING,
+                    "RUNNING",
+                    f"Discovering up to {external_budget} live Google Shopping SKUs "
+                    f"({top_n_per_query}/query across {len(queries)} categories).",
+                )
+                discovery_results = await asyncio.gather(
+                    *[self.fetch_top_products(session, q, top_n=top_n_per_query) for q in queries]
+                )
+                for result_list in discovery_results:
+                    discovered_rows.extend(result_list or [])
+                # Trim to requested external budget after concatenation.
+                discovered_rows = discovered_rows[:external_budget]
+                rows_to_write.extend(discovered_rows)
+
+        self._log_event(
+            EventStage.ENRICHING,
+            "SUCCESS",
+            f"SerpAPI returned {len(rows_to_write)} live rows "
+            f"({catalog_count} catalog refresh + {len(discovered_rows)} discovered).",
+            {
+                "processed_rows": len(rows_to_write),
+                "catalog_refreshed": catalog_count,
+                "discovered_skus": len(discovered_rows),
+                "external_source_status": "ok" if rows_to_write else "empty",
+            },
+        )
+
+        if not rows_to_write:
             self._log_event(EventStage.FETCHING, "COMPLETE", "No SKUs to track.")
             return {"status": "no_skus_to_track", "rows": [], "timestamp": None}
-
-        self._log_event(EventStage.ENRICHING, "RUNNING", f"Fetching external market prices for {len(skus_to_track)} SKUs.")
-        rows_to_write = []
-        async with aiohttp.ClientSession() as session:
-            tasks = [self.fetch_price(session, sku) for sku in skus_to_track]
-            results = await asyncio.gather(*tasks)
-
-            for result in results:
-                if result and result.get("sku_id"): # Ensure we have a valid SKU ID
-                    rows_to_write.append(result)
-        
-        self._log_event(EventStage.ENRICHING, "SUCCESS", f"Retrieved market prices for {len(rows_to_write)} SKUs.", {"processed_rows": len(rows_to_write)})
 
         self._log_event(EventStage.PROCESSING, "RUNNING", "Normalizing market prices and SKU rows.")
         for row in rows_to_write:
@@ -296,11 +446,23 @@ class CompetitorPriceFeed:
                 row["price_gap_pct"] = ((our_price - competitor_price) / our_price) * 100.0
             else:
                 row["price_gap_pct"] = 0.0
-        # Keep snapshot focused on real catalog rows with internal pricing.
-        # External expansion rows are useful for scan coverage but should not pollute
-        # dashboard with zero-valued internal prices.
-        rows_to_write = [r for r in rows_to_write if float(r.get("retailer_price") or 0.0) > 0]
-        self._log_event(EventStage.PROCESSING, "SUCCESS", "Price normalization and row processing complete.")
+        # Persist both catalog rows (with internal pricing) and EXT- expansion rows
+        # (real SerpAPI results without an internal price) so the snapshot reflects
+        # the full external scan. Dedup by sku_id, preferring the row with a
+        # non-zero competitor_price when the same SKU was scanned twice in one run.
+        deduped: Dict[str, Dict[str, Any]] = {}
+        for row in rows_to_write:
+            key = str(row.get("sku_id") or "").strip()
+            if not key:
+                continue
+            existing = deduped.get(key)
+            if existing is None:
+                deduped[key] = row
+                continue
+            if float(row.get("competitor_price") or 0.0) > float(existing.get("competitor_price") or 0.0):
+                deduped[key] = row
+        rows_to_write = list(deduped.values())
+        self._log_event(EventStage.PROCESSING, "SUCCESS", f"Normalized and deduped to {len(rows_to_write)} unique SKUs.")
 
         self._log_event(EventStage.ANALYZING, "RUNNING", "Calculating price gaps and priority alerts.")
         # Placeholder for actual analysis
@@ -311,28 +473,43 @@ class CompetitorPriceFeed:
         self._log_event(EventStage.UPDATING, "RUNNING", f"Writing {len(rows_to_write)} rows to BigQuery snapshot table.")
         rows_written = self._write_to_bq(rows_to_write, timestamp)
         
+        skus_processed = len(rows_to_write)
         run_status = "success" if rows_written > 0 else "partial"
         self._write_run_metadata(
-            run_id=self.current_run_id, # Use the run_id generated at the start
+            run_id=self.current_run_id,
             timestamp=timestamp,
-            skus_fetched=len(skus_to_track),
+            skus_fetched=skus_processed,
             rows_written=rows_written,
-            status=run_status
+            status=run_status,
         )
         self._log_event(EventStage.UPDATING, "SUCCESS", f"Wrote {rows_written} rows to BigQuery.", {"written_rows": rows_written})
 
+        # Upsert newly-discovered SKUs into sku_master so they become tracked
+        # catalog rows on subsequent scans (insert if new, update name if existing).
+        discovered_for_master = [r for r in rows_to_write if str(r.get("sku_id") or "").startswith("GS-")]
+        if discovered_for_master:
+            merged = self._upsert_sku_master(discovered_for_master)
+            self._log_event(
+                EventStage.UPDATING,
+                "SUCCESS" if merged >= 0 else "ERROR",
+                f"Merged {merged} discovered SKUs into sku_master." if merged >= 0
+                    else "Failed to merge discovered SKUs into sku_master.",
+                {"merged_master_rows": max(0, merged)},
+            )
+
         self._log_event(EventStage.RESPONDING, "RUNNING", "Updating dashboard, alerts, and SKU table.")
-        # This stage might involve updating other systems or preparing final response data
         self._log_event(EventStage.RESPONDING, "SUCCESS", "Dashboard and alerts updated.")
 
-        self._log_event(EventStage.COMPLETE, "SUCCESS", f"Feed run completed. Rows: {rows_written}/{len(skus_to_track)}", {"snapshot_rows": rows_written})
+        self._log_event(EventStage.COMPLETE, "SUCCESS", f"Feed run completed. Rows: {rows_written}/{skus_processed}", {"snapshot_rows": rows_written})
         return {
             "status": "success",
             "rows": rows_to_write,
             "timestamp": timestamp,
             "rows_written": rows_written,
-            "skus_processed": len(skus_to_track),
-            "run_id": self.current_run_id # Include run_id in response
+            "skus_processed": skus_processed,
+            "catalog_refreshed": catalog_count,
+            "discovered_skus": len(discovered_rows),
+            "run_id": self.current_run_id,
         }
 
     def _write_to_bq(self, rows: List[Dict[str, Any]], timestamp: str) -> int:
@@ -374,6 +551,77 @@ class CompetitorPriceFeed:
             log.error(f"Error writing to BigQuery table {self.FULL_TABLE_ID}: {e}")
             self._log_event(EventStage.UPDATING, "ERROR", f"Error writing to BigQuery table {self.FULL_TABLE_ID}: {e}", {"error_type": "BIGQUERY_WRITE_ERROR", "fix": f"Check permissions and table schema for {self.FULL_TABLE_ID}."})
             return 0
+
+    def _upsert_sku_master(self, discovered_rows: List[Dict[str, Any]]) -> int:
+        """MERGE newly-discovered Google Shopping SKUs into ``sku_master``.
+
+        Insert if the sku_id is new, update sku_name if it already exists.
+        Returns the number of rows merged, or -1 on error. Schema-introspects
+        ``sku_master`` so missing optional columns (like ``last_seen``) are
+        skipped instead of failing.
+        """
+        if not (self.bq_client and self.bq_client._client and discovered_rows):
+            return -1
+
+        try:
+            table = self.bq_client._client.get_table(self.sku_master_table_id)
+            field_names = {f.name.lower() for f in table.schema}
+            has_active = "active_flag" in field_names
+            has_last_seen = "last_seen" in field_names
+
+            # Build a static VALUES clause from the discovered rows. Each row is
+            # a (sku_id, sku_name) literal pair. Escape quotes defensively.
+            def _esc(s: str) -> str:
+                return str(s or "").replace("\\", "\\\\").replace("'", "\\'")
+
+            value_tuples = []
+            seen: set = set()
+            for r in discovered_rows:
+                sid = str(r.get("sku_id") or "").strip()
+                sname = str(r.get("sku_name") or "").strip()
+                if not sid or sid in seen:
+                    continue
+                seen.add(sid)
+                value_tuples.append(f"('{_esc(sid)}', '{_esc(sname)}')")
+            if not value_tuples:
+                return 0
+
+            insert_cols = ["sku_id", "sku_name"]
+            insert_vals = ["S.sku_id", "S.sku_name"]
+            update_set = ["sku_name = S.sku_name"]
+            if has_active:
+                insert_cols.append("active_flag")
+                insert_vals.append("TRUE")
+            if has_last_seen:
+                insert_cols.append("last_seen")
+                insert_vals.append("CURRENT_TIMESTAMP()")
+                update_set.append("last_seen = CURRENT_TIMESTAMP()")
+
+            sql = f"""
+                MERGE `{self.sku_master_table_id}` T
+                USING (
+                  SELECT sku_id, sku_name FROM UNNEST([
+                    STRUCT<sku_id STRING, sku_name STRING>
+                    {", ".join(value_tuples)}
+                  ])
+                ) S
+                ON T.sku_id = S.sku_id
+                WHEN MATCHED THEN UPDATE SET {", ".join(update_set)}
+                WHEN NOT MATCHED THEN INSERT ({", ".join(insert_cols)}) VALUES ({", ".join(insert_vals)})
+            """
+            job = self.bq_client._client.query(sql)
+            job.result()  # block until done
+            log.info(f"sku_master MERGE complete: {len(value_tuples)} candidates from discovery.")
+            return len(value_tuples)
+        except Exception as e:
+            log.error(f"sku_master MERGE failed: {e}")
+            self._log_event(
+                EventStage.UPDATING,
+                "ERROR",
+                f"sku_master MERGE failed: {e}",
+                {"error_type": "BIGQUERY_MERGE_ERROR", "fix": f"Check schema/permissions on {self.sku_master_table_id}."},
+            )
+            return -1
 
     def _write_run_metadata(
         self,

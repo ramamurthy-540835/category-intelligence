@@ -2,9 +2,12 @@
 
 import React from "react"; // Import React
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { ChatInterface } from "@/components/chat/ChatInterface";
 import AgentControlCenter from "@/components/chat/AgentControlCenter";
 import AlertTicker from "@/components/AlertTicker";
+import DemoFlowsSidebar from "@/components/DemoFlowsSidebar";
+import LiveTicker from "@/components/LiveTicker";
+import ChatPanel from "@/components/ChatPanel";
+import FlyoutCard from "@/components/FlyoutCard";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
@@ -90,8 +93,11 @@ export default function Home() {
   const [actionHistory, setActionHistory] = useState<ActionRecord[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [autoRefreshMins, setAutoRefreshMins] = useState(1);
-  const [autoRefreshOn, setAutoRefreshOn] = useState(true);
+  // Auto-refresh re-reads the latest BigQuery snapshot only — it never
+  // triggers a SerpAPI scan. Manual scans go through the "Run External
+  // Scan" button, which still calls refreshData().
+  const [autoRefreshMins, setAutoRefreshMins] = useState(5);
+  const [autoRefreshOn, setAutoRefreshOn] = useState(false);
 
   // Agent state for AgentControlCenter
   const [agentStatus, setAgentStatus] = useState<Status>('idle');
@@ -351,18 +357,24 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    // Initial data fetch should not depend on a refresh run finishing.
+    // On page load: read the latest BigQuery snapshot — do NOT trigger a
+    // SerpAPI scan. A scan costs ~100 SerpAPI calls per click and was
+    // previously firing on every mount + every minute.
     if (!hasInitialized.current) {
       hasInitialized.current = true;
       loadOverview();
       loadFeedStatus();
       fetchAgentEvents(null);
-      refreshData();
     }
 
-    const id = setInterval(refreshData, autoRefreshOn ? autoRefreshMins * 60000 : 3600000);
+    if (!autoRefreshOn) return;
+    // Auto-refresh only re-reads BigQuery (cheap). SerpAPI scans stay manual.
+    const id = setInterval(() => {
+      loadOverview();
+      loadFeedStatus();
+    }, autoRefreshMins * 60000);
     return () => clearInterval(id);
-  }, [autoRefreshMins, autoRefreshOn, refreshData, loadOverview, loadFeedStatus, fetchAgentEvents]);
+  }, [autoRefreshMins, autoRefreshOn, loadOverview, loadFeedStatus, fetchAgentEvents]);
 
   // Fetch events periodically if a run is active
   useEffect(() => {
@@ -471,14 +483,67 @@ export default function Home() {
   }, [latestEvent, isSystemError]);
 
 
+  // Demo KPI tiles — values mirror the Azure reference build until backend KPI
+  // endpoint exists. Wire to /dashboard/kpis when available.
+  const kpiTiles = [
+    { label: "CATEGORY REV", value: "$33.1M", delta: "▲▲ +6.2% vs plan / +14.8% YOY", tone: "positive" as const },
+    { label: "AVG MARGIN %", value: "22.3%", delta: "▲▲ +1.8pts vs Q4 plan", tone: "positive" as const },
+    { label: "INV. HEALTH", value: "74/100", delta: "▲▲ Avg 22d DoS — healthy range", tone: "positive" as const },
+    { label: "FCST ACCY", value: "78%", delta: "▼▼ -7pts vs 85% target", tone: "negative" as const },
+  ];
+
+  // Quick Actions and demo flows now live in <DemoFlowsSidebar />, so the
+  // inline panel that used to sit above AgentControlCenter has been removed.
+
+  const topTabs = [
+    { id: "category",   icon: "📊", label: "Category",   active: true  },
+    { id: "promotions", icon: "📈", label: "Promotions", active: false },
+    { id: "loyalty",    icon: "👑", label: "Loyalty",    active: false },
+    { id: "returns",    icon: "🔄", label: "Returns",    active: false },
+  ];
+
   return (
-    <main className="flex min-h-screen flex-col bg-gray-950">
-      <header className="bg-blue-900 px-6 py-3 flex items-center gap-4">
-        <span className="font-bold text-yellow-400 text-lg">BBY</span>
-        <span className="font-semibold text-white">Category Intelligence</span>
-        <span className="text-xs text-blue-300 ml-1">POWERED BY ADEPT AI</span>
+    <div className="flex h-screen bg-gray-950">
+      <DemoFlowsSidebar />
+      <main className="flex-1 flex flex-col overflow-auto">
+      <LiveTicker alerts={alerts} />
+      {/* Brand bar — Best Buy royal blue (#003087) with yellow logo block and Adept attribution */}
+      <header className="px-4 h-14 flex items-center justify-between bg-bby-blue">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-bby-yellow text-bby-blue font-extrabold text-[10px] leading-tight text-center">BEST<br/>BUY</span>
+          <span className="text-white font-semibold text-base">Category Intelligence</span>
+          <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider text-bby-yellow border border-bby-yellow/30">POWERED BY ADEPT AI</span>
+          <span className="hidden md:inline text-[12px] text-white/70 ml-3">Home Theater <span className="text-white/40">›</span> Q4 2024 Review</span>
+        </div>
+        <div className="flex items-center gap-2 text-[12px]">
+          <button className="px-3 py-1.5 rounded border border-white/30 text-white hover:bg-white/10" type="button">Export PDF</button>
+          <button className="px-3 py-1.5 rounded bg-bby-yellow text-bby-blue font-semibold hover:bg-yellow-300" type="button">Export PPT</button>
+          <span className="ml-2 inline-flex items-center justify-center w-8 h-8 rounded-full bg-bby-accent text-white text-xs font-semibold">AC</span>
+        </div>
       </header>
-      <div className="bg-slate-900 border-b border-slate-700 px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
+
+      {/* Top navigation tabs — Category / Promotions / Loyalty / Returns */}
+      <nav className="px-6 flex items-center gap-1 text-sm bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+        {topTabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={
+              "px-4 py-2 -mb-px border-b-2 transition-colors " +
+              (t.active
+                ? "border-bby-accent text-white font-semibold"
+                : "border-transparent text-slate-400 hover:text-slate-200")
+            }
+            disabled={!t.active}
+            title={t.active ? undefined : "Coming soon"}
+          >
+            <span className="mr-1.5">{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Status / data-source strip */}
+      <div className="bg-bby-surface border-b border-[var(--bby-border-subtle)] px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
         <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : source.includes("Auth Missing") ? "text-red-400 font-semibold" : source.includes("Error") ? "text-red-400 font-semibold" : "text-amber-300 font-semibold"}>{source}</span></span>
         <span className="flex items-center gap-3">
           <span>Last Refresh: {timestamp ? new Date(timestamp).toLocaleTimeString() : "--"}</span>
@@ -487,20 +552,63 @@ export default function Home() {
           </span>
         </span>
       </div>
+
+      {/* KPI scorecard row — 4 tiles mirroring Azure reference */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-6 py-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+        {kpiTiles.map((kpi) => (
+          <div
+            key={kpi.label}
+            className="rounded-lg px-4 py-2.5"
+            style={{ background: "var(--bby-kpi-bg)", border: "1px solid var(--bby-kpi-border)" }}
+          >
+            <div className="text-[11px] tracking-wider uppercase font-medium" style={{ color: "var(--bby-kpi-label)" }}>{kpi.label}</div>
+            <div className="text-[20px] font-bold leading-none mt-0.5 text-white">{kpi.value}</div>
+            <div className={"text-[11px] mt-1 " + (kpi.tone === "positive" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
+          </div>
+        ))}
+      </div>
+
       <AlertTicker alerts={alerts} />
-      <div className="flex flex-1 p-4 gap-4">
-        <div className="w-[30%] flex flex-col gap-3 h-full overflow-y-auto">
-          <AgentControlCenter
-            status={isSystemError ? 'error' : agentStatus}
-            steps={isSystemError ? [{step: 'error', content: 'System authentication error. Agent cannot run.'}] : agentSteps}
-            error={isSystemError ? "GCP Authentication Missing or Configuration Error. Agent functionality is blocked." : agentError}
-            alerts={alerts}
-          />
-          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[11px] text-slate-200">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="font-semibold">Agents in Action</h4>
-              <span className="text-xs text-slate-400">Live execution monitor for SKU pricing intelligence</span>
-            </div>
+      <div className="flex flex-1 p-4 gap-4 min-h-0">
+        <div className="w-[26%] flex flex-col gap-3 h-full overflow-y-auto">
+          <FlyoutCard
+            title="Agents in Action"
+            subtitle="Live execution monitor"
+            icon="🔄"
+            badge={
+              <span
+                className={
+                  "text-[11px] " +
+                  (progressSummary.current_status === "ERROR" ? "text-red-400"
+                    : progressSummary.current_status === "RUNNING" ? "text-amber-300"
+                    : progressSummary.current_status === "SUCCESS" ? "text-emerald-300"
+                    : "text-slate-400")
+                }
+              >
+                {progressSummary.current_stage || "IDLE"}
+              </span>
+            }
+            preview={
+              <div className="text-[10px] leading-relaxed text-[#64748b] w-full">
+                <div className="flex justify-between mb-0.5">
+                  <span>Stage</span>
+                  <span className="text-slate-200">{progressSummary.current_stage || 'IDLE'} {progressSummary.current_status || ''}</span>
+                </div>
+                <div className="flex justify-between mb-0.5">
+                  <span>Target</span>
+                  <span className="text-slate-200">{fetchSize} SKUs</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Errors</span>
+                  <span className={agentEvents.filter(e => e.status === 'ERROR').length > 0 ? "text-red-400 font-semibold" : "text-emerald-400 font-semibold"}>
+                    {agentEvents.filter(e => e.status === 'ERROR').length}
+                  </span>
+                </div>
+              </div>
+            }
+            defaultWidth="w-full"
+          >
+          <div className="bg-slate-900 border-t border-slate-800 p-3 text-[11px] text-slate-200">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-semibold">Pipeline Stages</h4>
               <div className="flex items-center gap-2">
@@ -621,15 +729,66 @@ export default function Home() {
               ))}
             </div>
           </div>
+          </FlyoutCard>
         </div>
-        <div className="w-[70%] flex flex-col gap-3 h-full overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-white">Live Pricing Intelligence</h3>
-              <span className={`text-[11px] ${isSystemError ? 'text-red-400' : 'text-slate-400'}`}>
+        <div className="flex-1 min-w-0 h-full flex flex-col">
+          <FlyoutCard
+            title="Agentic Category AI"
+            subtitle="Multi-step reasoning · Real-time data"
+            icon="⚡"
+            badge={
+              currentRunId
+                ? <span className="text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-full bg-[#78350f] text-[#f59e0b]">● Running</span>
+                : <span className="text-[9px] font-semibold tracking-wider px-1.5 py-0.5 rounded-full bg-[#166534] text-[#22c55e]">● Complete</span>
+            }
+            preview={
+              <div className="text-[10px] leading-relaxed w-full">
+                <div className="text-slate-300 mb-0.5">
+                  {latestEvent ? `[${latestEvent.stage}] ${latestEvent.message}` : 'Click a sidebar flow or ask a question.'}
+                </div>
+                <div className="text-[#475569]">
+                  Click to open chat · Stream Think → Act → Analyze → Respond
+                </div>
+              </div>
+            }
+            defaultWidth="flex-1"
+          >
+            <ChatPanel />
+          </FlyoutCard>
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col gap-3 h-full overflow-y-auto">
+          <FlyoutCard
+            title="Live Pricing Intelligence"
+            subtitle={isSystemError ? "System Error" : "bigquery-live"}
+            icon="💹"
+            badge={
+              <span className={`text-[11px] ${isSystemError ? 'text-red-400' : 'text-[#94a3b8]'}`}>
                 {isSystemError ? "System Error" : `${filteredRows.length} SKUs`}
               </span>
-            </div>
+            }
+            preview={
+              filteredRows.length > 0 ? (
+                <div className="text-[10px] leading-relaxed w-full">
+                  {filteredRows.slice(0, 3).map((row, i) => {
+                    const name = row.name || row.sku_name || row.sku_id;
+                    const gap = Number(row.price_gap_pct ?? 0) || 0;
+                    return (
+                      <div key={i} className="flex justify-between mb-0.5 gap-2">
+                        <span className="text-slate-200 truncate" style={{ maxWidth: '60%' }}>{name}</span>
+                        <span className={"font-semibold flex-shrink-0 " + (gap < 0 ? "text-emerald-400" : "text-red-400")}>
+                          {gap > 0 ? '+' : ''}{gap.toFixed(1)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className="text-[10px] text-[#475569] italic">{isSystemError ? "Backend unavailable" : "Loading pricing data…"}</span>
+              )
+            }
+            defaultWidth="w-full"
+          >
+          <div className="bg-slate-900 border-t border-slate-800 p-3">
             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU..." disabled={isSystemError} className="md:col-span-2 bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700" />
               <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "in" | "out")} disabled={isSystemError} className="bg-slate-800 text-slate-200 text-[11px] rounded px-2 py-1 border border-slate-700"><option value="all">All Stock</option><option value="in">In Stock</option><option value="out">Out of Stock</option></select>
@@ -672,6 +831,7 @@ export default function Home() {
               </>
             )}
           </div>
+          </FlyoutCard>
           {selected && !isSystemError && (
             <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-[12px] text-slate-200">
               <div className="flex items-center justify-between mb-2"><h4 className="font-semibold">SKU Detail: {selected.name || selected.sku_name || selected.sku_id}</h4><button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white">Close</button></div>
@@ -699,9 +859,16 @@ export default function Home() {
               </div>
             </div>
           )}
-          <div className="flex flex-1 h-full overflow-y-auto"><ChatInterface /></div>
         </div>
       </div>
-    </main>
+      </main>
+      <AgentControlCenter
+        status={isSystemError ? 'error' : agentStatus}
+        steps={isSystemError ? [{ step: 'error', content: 'System authentication error. Agent cannot run.' }] : agentSteps}
+        error={isSystemError ? "GCP Authentication Missing or Configuration Error. Agent functionality is blocked." : agentError}
+        alerts={alerts}
+        agentEvents={agentEvents}
+      />
+    </div>
   );
 }

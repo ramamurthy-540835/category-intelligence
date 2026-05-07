@@ -8,7 +8,7 @@ function getBackendUrl() {
 
 export async function GET() {
   try {
-    const res = await fetch(`${getBackendUrl()}/feeds/prices/status`, { cache: 'no-store' });
+    const res = await fetch(`${getBackendUrl()}/feeds/prices/latest`, { cache: 'no-store' });
     const text = await res.text();
     return new NextResponse(text, { status: res.status, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
