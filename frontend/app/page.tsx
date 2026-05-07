@@ -32,7 +32,6 @@ type OverviewPayload = {
   timestamp?: string;
   alerts?: Alert[];
   rows?: Row[];
-  message?: string;
   error?: string; // To capture backend errors
   error_type?: string; // To capture specific error types like GCP_AUTH_MISSING
   run_id?: string; // To capture the run ID for event fetching
@@ -40,7 +39,6 @@ type OverviewPayload = {
 
 type FeedStatus = {
   status: string;
-  message?: string;
   active_skus?: number;
   latest_snapshot_rows?: number;
   latest_run?: { run_id: string; timestamp: string; skus_fetched: number; rows_written: number; status: string };
@@ -109,25 +107,24 @@ export default function Home() {
   const [agentStatus, setAgentStatus] = useState<Status>('idle');
   const [agentSteps, setAgentSteps] = useState<{step: AgentStep, content: string}[]>([]);
   const [agentError, setAgentError] = useState<string | null>(null);
-  const [lastAgentMessage, setLastAgentMessage] = useState("");
 
   const logEvent = (phase: string, message: string) => {
     // This is for frontend-side logging, not backend events
-    setAgentEvents((prev) => [{ run_id: "ui-local", timestamp: new Date().toISOString(), stage: phase, status: 'INFO', message: message }, ...prev].slice(0, 20));
+    setAgentEvents((prev) => [{ timestamp: new Date().toISOString(), stage: phase, status: 'INFO', message: message }, ...prev].slice(0, 20));
   };
 
   const mapBackendStageToAgentStep = (stage: string): AgentStep => {
     switch (stage) {
-      case 'SENSING': return 'think';
-      case 'FETCHING': return 'think';
-      case 'ENRICHING': return 'analyze'; // Map Enriching to Analyze
-      case 'PROCESSING': return 'analyze';
-      case 'ANALYZING': return 'analyze';
-      case 'UPDATING': return 'act';
-      case 'RESPONDING': return 'respond';
+      case 'SENSING': return 'thinking';
+      case 'FETCHING': return 'thinking';
+      case 'ENRICHING': return 'analyzing'; // Map Enriching to Analyze
+      case 'PROCESSING': return 'analyzing';
+      case 'ANALYZING': return 'analyzing';
+      case 'UPDATING': return 'acting';
+      case 'RESPONDING': return 'responding';
       case 'COMPLETE': return 'done';
       case 'ERROR': return 'error';
-      default: return 'think';
+      default: return 'idle';
     }
   };
 
@@ -824,25 +821,13 @@ export default function Home() {
             </div>
           </div>
           </FlyoutCard>
-          <FlyoutCard
-            title="Agentic Category AI"
-            subtitle="Multi-step · Real-time"
-            icon="⚡"
-            badge={
-              refreshing
-                ? <span style={{background:'#78350f',color:'#f59e0b',fontSize:'9px',fontWeight:600,padding:'1px 6px',borderRadius:'999px'}}>● Running</span>
-                : <span style={{background:'#166534',color:'#22c55e',fontSize:'9px',fontWeight:600,padding:'1px 6px',borderRadius:'999px'}}>● Complete</span>
-            }
-            preview={
-              <div style={{fontSize:'10px',color:'#94a3b8',lineHeight:1.5,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:3 as any,WebkitBoxOrient:'vertical' as any}}>
-                {lastAgentMessage
-                  ? lastAgentMessage.slice(0, 120) + (lastAgentMessage.length > 120 ? '...' : '')
-                  : 'Select a demo flow or ask any question'}
-              </div>
-            }
-          >
+          {/* ChatPanel renders directly (not inside FlyoutCard) so it's
+              always mounted. That's required for the sidebar's
+              cat-flow-prompt dispatch to reach it and for ChatPanel to
+              broadcast cat-chat-status events the Strategy Loop listens to. */}
+          <div className="min-h-0 min-w-0 overflow-hidden">
             <ChatPanel />
-          </FlyoutCard>
+          </div>
           <FlyoutCard
             title="Live Pricing Intelligence"
             subtitle={isSystemError ? "System Error" : "bigquery-live"}
@@ -1008,9 +993,6 @@ export default function Home() {
           </div>
         </div>
       )}
-      <div className="hidden" aria-hidden="true">
-        <ChatPanel />
-      </div>
       <AgentControlCenter
         status={isSystemError ? 'error' : agentStatus}
         steps={isSystemError ? [{ step: 'error', content: 'System authentication error. Agent cannot run.' }] : agentSteps}
@@ -1021,9 +1003,3 @@ export default function Home() {
     </div>
   );
 }
-  useEffect(() => {
-    const doneEvent = agentEvents.find((e) => e.stage === "COMPLETE" || e.status === "SUCCESS");
-    if (doneEvent?.message) {
-      setLastAgentMessage(doneEvent.message.slice(0, 200));
-    }
-  }, [agentEvents]);
