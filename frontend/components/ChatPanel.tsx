@@ -149,20 +149,20 @@ export default function ChatPanel() {
       {/* Message area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 min-h-0">
         {showEmptyState && (
-          <div className="flex flex-col items-center justify-center text-center mt-12 mb-6">
-            <span className="text-[32px]" style={{ color: "var(--bby-step-active-icon)" }}>⚡</span>
-            <div className="text-white text-base font-medium mt-2">Category Intelligence Agent</div>
-            <div className="text-[13px] mt-1" style={{ color: "var(--bby-kpi-label)" }}>
-              Select a demo flow or ask any question
+          // Compact empty state — no large hero icon/title.
+          // Just a one-line hint plus the suggested-prompt chips so the
+          // panel reads like a compact preview when no message has fired.
+          <div className="flex flex-col items-start gap-2.5">
+            <div className="text-[11px]" style={{ color: "var(--bby-kpi-label)" }}>
+              Select a demo flow or ask any question.
             </div>
-
-            <div className="flex flex-wrap gap-2 mt-5 justify-center max-w-md">
+            <div className="flex flex-wrap gap-1.5">
               {SUGGESTED_PROMPTS.map((p) => (
                 <button
                   key={p}
                   type="button"
                   onClick={() => submit(p)}
-                  className="px-3.5 py-1.5 rounded-full text-[12px] transition-colors border bg-[#1e2532] border-[#2d3748] text-[#94a3b8] hover:bg-[#1e3a5f] hover:border-[#3b82f6] hover:text-[#60a5fa]"
+                  className="px-2.5 py-1 rounded-full text-[10px] transition-colors border bg-[#1e2532] border-[#2d3748] text-[#94a3b8] hover:bg-[#1e3a5f] hover:border-[#3b82f6] hover:text-[#60a5fa]"
                 >
                   {p}
                 </button>
