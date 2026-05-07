@@ -1,0 +1,80 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [build, -t, gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA, ./backend]
+    id: build-backend
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [push, gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA]
+    id: push-backend
+    waitFor: [build-backend]
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - category-intelligence-backend
+      - --image=gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA
+      - --region=us-central1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=2Gi
+      - --cpu=2
+      - --service-account=category-intelligence-sa@ctoteam.iam.gserviceaccount.com
+      - --set-env-vars=GCP_PROJECT_ID=ctoteam,BIGQUERY_DATASET=category_intelligence,VERTEX_MODEL=gemini-2.5-flash,VERTEX_AI_LOCATION=us-central1
+      - --set-secrets=SERPAPI_KEY=serpapi-key:latest
+    id: deploy-backend
+    waitFor: [push-backend]
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe category-intelligence-backend \
+          --region=us-central1 --format=value(status.url) > /workspace/backend_url.txt
+        cat /workspace/backend_url.txt
+    id: get-backend-url
+    waitFor: [deploy-backend]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        BACKEND_URL=$(cat /workspace/backend_url.txt)
+        docker build \
+          --build-arg NEXT_PUBLIC_BACKEND_URL=$$BACKEND_URL \
+          -t gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA \
+          ./frontend
+    id: build-frontend
+    waitFor: [get-backend-url]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [push, gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA]
+    id: push-frontend
+    waitFor: [build-frontend]
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        BACKEND_URL=$(cat /workspace/backend_url.txt)
+        gcloud run deploy category-intelligence-frontend \
+          --image=gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA \
+          --region=us-central1 \
+          --platform=managed \
+          --allow-unauthenticated \
+          --port=3000 \
+          --memory=1Gi \
+          --cpu=1 \
+          --service-account=category-intelligence-sa@ctoteam.iam.gserviceaccount.com \
+          --set-env-vars="NEXT_PUBLIC_BACKEND_URL=$$BACKEND_URL"
+    id: deploy-frontend
+    waitFor: [push-frontend]
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
