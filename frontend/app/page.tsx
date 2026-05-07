@@ -485,13 +485,62 @@ export default function Home() {
 
 
   // Demo KPI tiles — values mirror the Azure reference build until backend KPI
-  // endpoint exists. Wire to /dashboard/kpis when available.
-  const kpiTiles = [
-    { label: "CATEGORY REV", value: "$33.1M", delta: "▲▲ +6.2% vs plan / +14.8% YOY", tone: "positive" as const },
-    { label: "AVG MARGIN %", value: "22.3%", delta: "▲▲ +1.8pts vs Q4 plan", tone: "positive" as const },
-    { label: "INV. HEALTH", value: "74/100", delta: "▲▲ Avg 22d DoS — healthy range", tone: "positive" as const },
-    { label: "FCST ACCY", value: "78%", delta: "▼▼ -7pts vs 85% target", tone: "negative" as const },
-  ];
+  // endpoints exist. Tile set swaps as the user picks a different demo flow
+  // from the sidebar. activeFlowId is updated below via the `cat-flow-event`
+  // window event that DemoFlowsSidebar dispatches.
+  type KpiTile = { label: string; value: string; delta: string; color: "green" | "red" };
+  const FLOW_KPIS: Record<string, KpiTile[]> = {
+    "category-overview": [
+      { label: "CATEGORY REV", value: "$33.1M", delta: "▲▲ +6.2% vs plan / +14.8% YOY", color: "green" },
+      { label: "AVG MARGIN %", value: "22.3%",  delta: "▲▲ +1.8pts vs Q4 plan",          color: "green" },
+      { label: "INV. HEALTH",  value: "74/100", delta: "▲▲ Avg 22d DoS — healthy range", color: "green" },
+      { label: "FCST ACCY",    value: "78%",    delta: "▼▼ -7pts vs 85% target",         color: "red"   },
+    ],
+    "health-check": [
+      { label: "BELOW FCST",    value: "18",    delta: "▼▼ 38% of 47 active SKUs",          color: "red" },
+      { label: "OVERSTK COST",  value: "$2.1M", delta: "▲ +$340K vs 90 days ago",            color: "red" },
+      { label: "PROMO ROAS",    value: "2.1×",  delta: "▼▼ vs 4.2× target",                   color: "red" },
+      { label: "STOCKOUT RISK", value: "5",     delta: "▼▼ Within next 14 days",              color: "red" },
+    ],
+    "diagnose-lg-c3": [
+      { label: "C3 VS FCST",    value: "-31%",  delta: "▼▼ Worst performer in category",      color: "red"   },
+      { label: "DAYS SUPPLY",   value: "41d",   delta: "▼▼ 2× category avg of 20 days",       color: "red"   },
+      { label: "PROMO LIFT",    value: "8%",    delta: "▼▼ vs 22% planned — 64% miss",        color: "red"   },
+      { label: "PROJ RECOVERY", value: "420u",  delta: "▲ via vendor co-op (6 wks)",          color: "green" },
+    ],
+    "simulate-samsung": [
+      { label: "BEST UNITS",    value: "2,710", delta: "▲▲ +47% vs baseline (+870 units)",    color: "green" },
+      { label: "BEST REVENUE",  value: "$4.3M", delta: "▲▲ +$1.1M vs baseline",                color: "green" },
+      { label: "BEST MARGIN",   value: "$796K", delta: "▲▲ +$82K vs baseline (+11.5%)",        color: "green" },
+      { label: "STOCKOUT RISK", value: "3 Stores", delta: "▼▼ Houston, Schaumburg, Tysons",   color: "red"   },
+    ],
+    "price-vs-amazon": [
+      { label: "ABOVE AMAZON",   value: "8 SKUs",  delta: "▼▼ Top 10 hero TVs",             color: "red" },
+      { label: "MARGIN AT RISK", value: "$430K",   delta: "▼▼ If no reprice action",         color: "red" },
+      { label: "AVG PRICE GAP",  value: "-7.7%",   delta: "▼▼ vs Amazon baseline",            color: "red" },
+      { label: "URGENT REPRICE", value: "3 SKUs",  delta: "▼▼ Gap > 10%",                     color: "red" },
+    ],
+    "ad-plan-optimizer": [
+      { label: "CO-OP AVAILABLE",  value: "$143K", delta: "▲ Across 4 vendors",       color: "green" },
+      { label: "EXPIRING SOON",    value: "$43K",  delta: "▼▼ Hisense — Dec 31",      color: "red"   },
+      { label: "BEST ROAS",        value: "4.1×",  delta: "▲▲ SMS channel",            color: "green" },
+      { label: "CAMPAIGNS READY",  value: "6",     delta: "▲ Awaiting approval",        color: "green" },
+    ],
+  };
+
+  const [activeFlowId, setActiveFlowId] = useState<string>("category-overview");
+  useEffect(() => {
+    const onFlow = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail === "object" && (detail as any).flowId) {
+        setActiveFlowId((detail as any).flowId);
+      }
+    };
+    window.addEventListener("cat-flow-event", onFlow);
+    return () => window.removeEventListener("cat-flow-event", onFlow);
+  }, []);
+
+  const kpiTiles = FLOW_KPIS[activeFlowId] ?? FLOW_KPIS["category-overview"];
 
   // Quick Actions and demo flows now live in <DemoFlowsSidebar />, so the
   // inline panel that used to sit above AgentControlCenter has been removed.
@@ -513,7 +562,7 @@ export default function Home() {
 
   return (
     <div className="flex h-screen bg-gray-950">
-      <DemoFlowsSidebar />
+      <DemoFlowsSidebar activeFlowId={activeFlowId} onFlowSelect={(_, id) => setActiveFlowId(id)} />
       <main className="flex-1 flex flex-col overflow-auto">
       <LiveTicker alerts={alerts} />
       {/* Brand bar — Best Buy royal blue (#003087) with yellow logo block and Adept attribution */}
@@ -580,7 +629,7 @@ export default function Home() {
           >
             <div className="text-[9px] tracking-widest uppercase font-semibold" style={{ color: "var(--bby-kpi-label)" }}>{kpi.label}</div>
             <div className="text-[20px] font-bold leading-none mt-0.5 text-white">{kpi.value}</div>
-            <div className={"text-[10px] mt-0.5 " + (kpi.tone === "positive" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
+            <div className={"text-[10px] mt-0.5 " + (kpi.color === "green" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
           </div>
         ))}
       </div>
