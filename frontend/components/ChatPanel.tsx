@@ -53,6 +53,16 @@ export default function ChatPanel() {
     }
   }, [isStreaming, finalResponse]);
 
+  // Publish chat status/steps so the Agent Control Center's Strategy Loop
+  // can mirror Think → Act → Analyze → Respond in real time. ACC listens
+  // for this same `cat-chat-status` event.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent("cat-chat-status", { detail: { status, steps } }),
+    );
+  }, [status, steps]);
+
   // Scroll to bottom on every new step / message.
   useEffect(() => {
     // Use "auto" not "smooth" so streaming tokens don't queue up an animation per chunk.

@@ -63,7 +63,7 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
             s.sku_name,
             CAST(s.retailer_price AS FLOAT64)   AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
-            CAST(s.price_gap_pct AS FLOAT64)    AS gap_pct,
+            CAST(s.price_gap_pct AS FLOAT64)    AS price_gap_pct,
             IF(COALESCE(s.in_stock, TRUE), 'In', 'Out') AS stock_status,
             s.snapshot_time
         FROM `{PROJECT}.{DATASET}.competitor_price_snapshots` s
@@ -72,6 +72,13 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
             FROM `{PROJECT}.{DATASET}.competitor_price_snapshots`
         )
         {sku_clause}
+          -- Sanity bounds: drop rows where SerpAPI returned a marketplace,
+          -- bundle, or component listing that isn't a like-for-like compare.
+          -- Allowed market price band: 0.5x–1.5x of our price.
+          AND s.retailer_price > 0
+          AND s.competitor_price > 0
+          AND s.competitor_price >= s.retailer_price * 0.5
+          AND s.competitor_price <= s.retailer_price * 1.5
         QUALIFY ROW_NUMBER() OVER (PARTITION BY s.sku_id ORDER BY s.competitor_price DESC) = 1
         ORDER BY ABS(price_gap_pct) DESC
         LIMIT @row_limit
@@ -98,7 +105,7 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Di
             CAST(s.retailer_price AS FLOAT64)   AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
             ROUND(s.retailer_price - s.competitor_price, 2) AS price_gap_abs,
-            CAST(s.price_gap_pct AS FLOAT64)    AS gap_pct
+            CAST(s.price_gap_pct AS FLOAT64)    AS price_gap_pct
         FROM `{PROJECT}.{DATASET}.competitor_price_snapshots` s
         WHERE s.snapshot_time = (
             SELECT MAX(snapshot_time)
@@ -106,15 +113,19 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Di
         )
           AND s.price_gap_pct < 0
           {sku_clause}
+          AND s.retailer_price > 0
+          AND s.competitor_price > 0
+          AND s.competitor_price >= s.retailer_price * 0.5
+          AND s.competitor_price <= s.retailer_price * 1.5
         QUALIFY ROW_NUMBER() OVER (PARTITION BY s.sku_id ORDER BY s.competitor_price DESC) = 1
-        ORDER BY gap_pct ASC
+        ORDER BY price_gap_pct ASC
         LIMIT @row_limit
     """
     rows = _run_query(sql, params)
     return {
         "source": "bigquery-live" if rows else "empty",
         "table": "competitor_price_snapshots",
-        "note": "gap_pct < 0 means our price is below market (margin opportunity)",
+        "note": "price_gap_pct < 0 means our price is below market (margin opportunity)",
         "row_count": len(rows),
         "data": rows,
     }
@@ -211,11 +222,11 @@ def _format_as_markdown(question: str, tool_name: str, result: Dict[str, Any]) -
     # Root cause line — try to surface the most extreme row
     if isinstance(data, list) and data and isinstance(data[0], dict):
         first = data[0]
-        if "gap_pct" in first:
+        if "price_gap_pct" in first:
             lines += [
                 "## ROOT CAUSE",
                 f"Top divergence: **{first.get('sku_name') or first.get('sku_id')}** "
-                f"at gap **{first.get('gap_pct'):.1f}%** (ours ${first.get('our_price', 0):,.2f} vs market ${first.get('market_price', 0):,.2f}).",
+                f"at gap **{first.get('price_gap_pct'):.1f}%** (ours ${first.get('our_price', 0):,.2f} vs market ${first.get('market_price', 0):,.2f}).",
             ]
         else:
             lines += ["## ROOT CAUSE", f"Showing top **{result.get('row_count', len(data))}** rows from `{result.get('table', 'unknown')}`."]
@@ -229,9 +240,9 @@ def _format_as_markdown(question: str, tool_name: str, result: Dict[str, Any]) -
             if not isinstance(row, dict):
                 continue
             label = row.get("sku_name") or row.get("sku_id") or row.get("event") or row.get("metric") or "row"
-            if "gap_pct" in row:
+            if "price_gap_pct" in row:
                 lines.append(
-                    f"- **{label}** — ours ${row.get('our_price', 0):,.2f}, market ${row.get('market_price', 0):,.2f}, gap **{row.get('gap_pct', 0):.1f}%**"
+                    f"- **{label}** — ours ${row.get('our_price', 0):,.2f}, market ${row.get('market_price', 0):,.2f}, gap **{row.get('price_gap_pct', 0):.1f}%**"
                 )
             elif "value" in row:
                 lines.append(f"- **{label}** — value {row.get('value')}")

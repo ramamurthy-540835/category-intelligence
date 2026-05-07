@@ -554,16 +554,16 @@ export default function Home() {
       </div>
 
       {/* KPI scorecard row — 4 tiles mirroring Azure reference */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-6 py-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 px-4 py-2 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
         {kpiTiles.map((kpi) => (
           <div
             key={kpi.label}
-            className="rounded-lg px-4 py-2.5"
+            className="rounded-md px-3 py-2"
             style={{ background: "var(--bby-kpi-bg)", border: "1px solid var(--bby-kpi-border)" }}
           >
-            <div className="text-[11px] tracking-wider uppercase font-medium" style={{ color: "var(--bby-kpi-label)" }}>{kpi.label}</div>
+            <div className="text-[9px] tracking-widest uppercase font-semibold" style={{ color: "var(--bby-kpi-label)" }}>{kpi.label}</div>
             <div className="text-[20px] font-bold leading-none mt-0.5 text-white">{kpi.value}</div>
-            <div className={"text-[11px] mt-1 " + (kpi.tone === "positive" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
+            <div className={"text-[10px] mt-0.5 " + (kpi.tone === "positive" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
           </div>
         ))}
       </div>
@@ -592,7 +592,15 @@ export default function Home() {
               <div className="text-[10px] leading-relaxed text-[#64748b] w-full">
                 <div className="flex justify-between mb-0.5">
                   <span>Stage</span>
-                  <span className="text-slate-200">{progressSummary.current_stage || 'IDLE'} {progressSummary.current_status || ''}</span>
+                  <span className="text-slate-200">
+                    {(() => {
+                      const stage = progressSummary.current_stage || 'IDLE';
+                      const status = progressSummary.current_status || '';
+                      // Hide "IDLE IDLE" / dupe collapses to just the stage name.
+                      if (!status || status === stage) return stage;
+                      return `${stage} ${status}`;
+                    })()}
+                  </span>
                 </div>
                 <div className="flex justify-between mb-0.5">
                   <span>Target</span>
@@ -782,8 +790,12 @@ export default function Home() {
                     );
                   })}
                 </div>
+              ) : isSystemError ? (
+                <span className="text-[10px] text-red-400 italic">Backend unavailable</span>
+              ) : rows.length === 0 ? (
+                <span className="text-[10px] text-[#475569] italic">Loading pricing data…</span>
               ) : (
-                <span className="text-[10px] text-[#475569] italic">{isSystemError ? "Backend unavailable" : "Loading pricing data…"}</span>
+                <span className="text-[10px] text-[#475569] italic">No SKUs match filter</span>
               )
             }
             defaultWidth="w-full"

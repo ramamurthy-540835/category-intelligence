@@ -151,13 +151,33 @@ const nowTimeStr = () =>
 
 // ── Component ────────────────────────────────────────────────────────────────
 export default function AgentControlCenter({
-  status = "idle",
-  steps = [],
+  status: propStatus = "idle",
+  steps: propSteps = [],
   error,
 }: Props) {
   const [tab, setTab] = useState<"activity" | "alerts">("activity");
   const [activeFlow, setActiveFlow] = useState<{ flowId: string; label: string; icon: string } | null>(null);
   const [memory, setMemory] = useState<Array<{ type: "flow" | "message"; text: string; ts: string }>>([]);
+
+  // Strategy Loop and Multi-Agent Network mirror the *chat* agent, not the
+  // dashboard pipeline. Subscribe to ChatPanel's `cat-chat-status` events.
+  // Falls back to props if ChatPanel hasn't fired yet (idle state).
+  const [chatStatus, setChatStatus] = useState<Status>(propStatus);
+  const [chatSteps, setChatSteps] = useState<Props["steps"]>(propSteps);
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail === "object") {
+        if (detail.status !== undefined) setChatStatus(detail.status);
+        if (Array.isArray(detail.steps)) setChatSteps(detail.steps);
+      }
+    };
+    window.addEventListener("cat-chat-status", onStatus);
+    return () => window.removeEventListener("cat-chat-status", onStatus);
+  }, []);
+  // Local aliases used below for the loop / network rendering.
+  const status = chatStatus;
+  const steps = chatSteps;
 
   // Listen for sidebar flow events + chat-input events for memory
   useEffect(() => {
