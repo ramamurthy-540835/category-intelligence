@@ -1,6 +1,45 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+// ── useAnimatedNumber ──────────────────────────────────────────────────────
+// Smoothly interpolates from the previous value to the new one over the
+// given duration using requestAnimationFrame. No external dep.
+function useAnimatedNumber(target: number, durationMs = 600): number {
+  const [display, setDisplay] = useState(target);
+  const fromRef = useRef(target);
+  const startRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    fromRef.current = display;
+    startRef.current = null;
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+
+    const tick = (ts: number) => {
+      if (startRef.current === null) startRef.current = ts;
+      const elapsed = ts - startRef.current;
+      const t = Math.min(1, elapsed / durationMs);
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - t, 3);
+      const current = fromRef.current + (target - fromRef.current) * eased;
+      setDisplay(current);
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        setDisplay(target);
+        rafRef.current = null;
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, durationMs]);
+
+  return display;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // LIVE SCENARIO SIMULATOR — appears in place of the trend chart when the
@@ -45,6 +84,12 @@ export default function ScenarioSimulator() {
   const unitsDelta = projectedUnits - baselineUnits;
   const unitsDeltaPct = (unitsDelta / baselineUnits) * 100;
   const revenueDelta = revenue - baselineRevenue;
+
+  // Animated displays — interpolate over 600ms when slider values change.
+  const animUnits   = useAnimatedNumber(projectedUnits);
+  const animRevenue = useAnimatedNumber(revenue);
+  const animMargin  = useAnimatedNumber(marginDollars);
+  const animIrrWk   = useAnimatedNumber(irrWeeks);
 
   return (
     <div
@@ -148,7 +193,7 @@ export default function ScenarioSimulator() {
               Projected Units
             </div>
             <div className="text-[22px] font-bold leading-none mt-0.5 text-white tabular-nums">
-              {fmtUnits(projectedUnits)}
+              {fmtUnits(Math.round(animUnits))}
             </div>
             <div className={"text-[10px] mt-0.5 " + (unitsDelta >= 0 ? "text-emerald-300" : "text-red-300")}>
               {unitsDelta >= 0 ? "▲" : "▼"} {unitsDelta >= 0 ? "+" : ""}{unitsDelta} ({unitsDeltaPct >= 0 ? "+" : ""}{unitsDeltaPct.toFixed(1)}%) vs baseline
@@ -160,7 +205,7 @@ export default function ScenarioSimulator() {
               Revenue
             </div>
             <div className="text-[22px] font-bold leading-none mt-0.5 text-white tabular-nums">
-              {fmtMoney(revenue)}
+              {fmtMoney(animRevenue)}
             </div>
             <div className={"text-[10px] mt-0.5 " + (revenueDelta >= 0 ? "text-emerald-300" : "text-red-300")}>
               {revenueDelta >= 0 ? "▲" : "▼"} {revenueDelta >= 0 ? "+" : "-"}{fmtMoney(Math.abs(revenueDelta))} vs baseline
@@ -172,7 +217,7 @@ export default function ScenarioSimulator() {
               Margin $
             </div>
             <div className="text-[22px] font-bold leading-none mt-0.5 text-white tabular-nums">
-              {fmtMoney(marginDollars)}
+              {fmtMoney(animMargin)}
             </div>
             <div className="text-[10px] mt-0.5" style={{ color: "#bfdbfe" }}>
               @ {(MARGIN_RATE * 100).toFixed(1)}% rate
@@ -184,7 +229,7 @@ export default function ScenarioSimulator() {
               IRR Payback
             </div>
             <div className="text-[22px] font-bold leading-none mt-0.5 text-white tabular-nums">
-              {irrWeeks}WK
+              {Math.round(animIrrWk)}WK
             </div>
             <div className="text-[10px] mt-0.5" style={{ color: "#bfdbfe" }}>
               break-even horizon

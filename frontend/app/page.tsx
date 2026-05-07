@@ -639,7 +639,7 @@ export default function Home() {
       {/* Trend chart by default; swaps to a live scenario simulator while
           the "Simulate: Samsung" demo flow is active. */}
       <div className="px-4 pt-2 pb-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
-        {activeFlowId === "simulate-samsung" ? <ScenarioSimulator /> : <SellThroughChart />}
+        {activeFlowId === "simulate-samsung" ? <ScenarioSimulator /> : <SellThroughChart flowKey={activeFlowId} />}
       </div>
 
       <AlertTicker alerts={alerts} />

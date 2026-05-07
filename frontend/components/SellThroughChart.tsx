@@ -1,7 +1,8 @@
 "use client";
 
 import {
-  LineChart,
+  ComposedChart,
+  Area,
   Line,
   XAxis,
   YAxis,
@@ -22,6 +23,7 @@ const SELL_THROUGH_DATA = [
   { week: "W50", Samsung: 530, Sony: 220, LG: 110, Forecast: 500 },
   { week: "W52", Samsung: 560, Sony: 200, LG: 105, Forecast: 520 },
 ];
+const LAST_INDEX = SELL_THROUGH_DATA.length - 1;
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────
 function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
@@ -53,12 +55,34 @@ function CustomTooltip({ active, payload, label }: TooltipProps<number, string>)
   );
 }
 
-// ── Custom legend formatter ────────────────────────────────────────────────
 const legendFormatter = (value: string, entry: any) => (
   <span style={{ color: entry?.color, marginRight: 12, fontSize: 11 }}>● {value}</span>
 );
 
-export default function SellThroughChart() {
+// ── Pulsing end-dot factory ─────────────────────────────────────────────────
+// Renders a CSS-animated SVG circle ONLY at the last data point. The class
+// `pulse-ring-N` is keyed so each brand staggers its phase by N * 200ms.
+function makePulseDot(color: string, classSuffix: string) {
+  return (props: any) => {
+    const { cx, cy, index } = props;
+    if (index !== LAST_INDEX) return null;
+    return (
+      <g>
+        {/* Outer halo: scales 1 → 1.8, fades */}
+        <circle cx={cx} cy={cy} r={5} fill={color} className={`pulse-ring ${classSuffix}`} />
+        {/* Solid inner dot */}
+        <circle cx={cx} cy={cy} r={4} fill={color} stroke="#fff" strokeWidth={1.2} />
+      </g>
+    );
+  };
+}
+
+interface Props {
+  /** When this prop changes the chart re-mounts and re-animates. */
+  flowKey?: string | number;
+}
+
+export default function SellThroughChart({ flowKey }: Props) {
   return (
     <div
       style={{
@@ -93,15 +117,39 @@ export default function SellThroughChart() {
           REAL-TIME
         </span>
       </div>
+
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={SELL_THROUGH_DATA} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
-          <CartesianGrid stroke="#1e2532" strokeDasharray="3 3" />
+        {/* `key={flowKey}` forces a re-mount → recharts replays the line-draw
+            animation every time the parent's active flow changes. */}
+        <ComposedChart
+          key={flowKey}
+          data={SELL_THROUGH_DATA}
+          margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
+        >
+          <defs>
+            <linearGradient id="samsung-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.30} />
+              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="sony-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor="#f59e0b" stopOpacity={0.30} />
+              <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="lg-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor="#ef4444" stopOpacity={0.30} />
+              <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+
+          <CartesianGrid stroke="#1e2532" strokeDasharray="3 3" vertical horizontal />
           <XAxis dataKey="week" tick={{ fontSize: 10, fill: "#64748b" }} stroke="#475569" />
           <YAxis tick={{ fontSize: 10, fill: "#64748b" }} stroke="#475569" />
-          <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#3b82f6", strokeOpacity: 0.4 }} />
+          <Tooltip
+            content={<CustomTooltip />}
+            cursor={{ stroke: "#3b82f6", strokeWidth: 1, strokeDasharray: "4 4" }}
+          />
           <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={legendFormatter} />
 
-          {/* Plan baseline reference */}
           <ReferenceLine
             y={400}
             stroke="#475569"
@@ -109,39 +157,47 @@ export default function SellThroughChart() {
             label={{ value: "Plan", fill: "#475569", fontSize: 10, position: "right" }}
           />
 
-          <Line
+          <Area
             type="monotone"
             dataKey="Samsung"
             stroke="#3b82f6"
             strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            fill="url(#samsung-gradient)"
+            fillOpacity={1}
+            dot={makePulseDot("#3b82f6", "pulse-samsung")}
+            activeDot={{ r: 6, strokeWidth: 2, stroke: "#fff" }}
             isAnimationActive
-            animationDuration={1200}
+            animationDuration={1400}
             animationEasing="ease-out"
           />
-          <Line
+          <Area
             type="monotone"
             dataKey="Sony"
             stroke="#f59e0b"
             strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            fill="url(#sony-gradient)"
+            fillOpacity={1}
+            dot={makePulseDot("#f59e0b", "pulse-sony")}
+            activeDot={{ r: 6, strokeWidth: 2, stroke: "#fff" }}
             isAnimationActive
-            animationDuration={1200}
+            animationDuration={1400}
             animationEasing="ease-out"
           />
-          <Line
+          <Area
             type="monotone"
             dataKey="LG"
             stroke="#ef4444"
             strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+            fill="url(#lg-gradient)"
+            fillOpacity={1}
+            dot={makePulseDot("#ef4444", "pulse-lg")}
+            activeDot={{ r: 6, strokeWidth: 2, stroke: "#fff" }}
             isAnimationActive
-            animationDuration={1200}
+            animationDuration={1400}
             animationEasing="ease-out"
           />
+
+          {/* Forecast stays a thin dashed line — no fill, no pulse */}
           <Line
             type="monotone"
             dataKey="Forecast"
@@ -151,11 +207,30 @@ export default function SellThroughChart() {
             dot={false}
             activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
             isAnimationActive
-            animationDuration={1200}
+            animationDuration={1400}
             animationEasing="ease-out"
           />
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
+
+      {/* Pulse keyframes for the end-dots. The class is applied to SVG <circle>
+          which supports CSS `transform: scale()` with `transform-origin`. The
+          `transform-box: fill-box` wraps scaling around the circle's centre. */}
+      <style>{`
+        .pulse-ring {
+          transform-box: fill-box;
+          transform-origin: center;
+          animation: pulse-ring 1.6s ease-in-out infinite;
+        }
+        .pulse-samsung { animation-delay: 0ms;   }
+        .pulse-sony    { animation-delay: 200ms; }
+        .pulse-lg      { animation-delay: 400ms; }
+        @keyframes pulse-ring {
+          0%   { transform: scale(1);   opacity: 0.85; }
+          50%  { transform: scale(1.8); opacity: 0.20; }
+          100% { transform: scale(1);   opacity: 0.85; }
+        }
+      `}</style>
     </div>
   );
 }
