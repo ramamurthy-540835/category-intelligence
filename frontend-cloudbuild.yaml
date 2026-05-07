@@ -1,0 +1,11 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+    - build
+    - --build-arg
+    - NEXT_PUBLIC_BACKEND_URL=https://category-intelligence-backend-gygcwrc62a-uc.a.run.app
+    - -t
+    - gcr.io/ctoteam/category-intelligence-frontend:latest
+    - ./frontend
+images:
+  - gcr.io/ctoteam/category-intelligence-frontend:latest
