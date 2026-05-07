@@ -54,7 +54,7 @@ export default function FlyoutCard({
         >
           {preview ?? (
             <span style={{ fontSize: "10px", color: "#475569", fontStyle: "italic" }}>
-              Hover to preview Â· click to expand
+              Hover to preview · click to expand
             </span>
           )}
         </div>
