@@ -9,8 +9,9 @@ import LiveTicker from "@/components/LiveTicker";
 import ChatPanel from "@/components/ChatPanel";
 import FlyoutCard from "@/components/FlyoutCard";
 import BQExplorer from "@/components/BQExplorer";
-import SellThroughChart from "@/components/SellThroughChart";
+import SellThroughChart, { SELL_THROUGH_DATA } from "@/components/SellThroughChart";
 import ScenarioSimulator from "@/components/ScenarioSimulator";
+import WeekDetailPanel from "@/components/WeekDetailPanel";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
@@ -548,6 +549,10 @@ export default function Home() {
   // inline panel that used to sit above AgentControlCenter has been removed.
 
   const [bqOpen, setBqOpen] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
+  const selectedWeekRow = selectedWeek
+    ? SELL_THROUGH_DATA.find((r) => r.week === selectedWeek) ?? null
+    : null;
   useEffect(() => {
     if (!bqOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setBqOpen(false); };
@@ -563,9 +568,9 @@ export default function Home() {
   ];
 
   return (
-    <div className="flex h-screen bg-gray-950">
+    <div className="flex h-screen overflow-hidden bg-gray-950">
       <DemoFlowsSidebar activeFlowId={activeFlowId} onFlowSelect={(_, id) => setActiveFlowId(id)} />
-      <main className="flex-1 flex flex-col overflow-auto">
+      <main className="flex-1 min-w-0 flex flex-col overflow-y-auto overflow-x-hidden">
       <LiveTicker alerts={alerts} />
       {/* Brand bar — Best Buy royal blue (#003087) with yellow logo block and Adept attribution */}
       <header className="px-4 h-14 flex items-center justify-between bg-bby-blue">
@@ -639,14 +644,16 @@ export default function Home() {
       {/* Trend chart by default; swaps to a live scenario simulator while
           the "Simulate: Samsung" demo flow is active. */}
       <div className="px-4 pt-2 pb-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
-        {activeFlowId === "simulate-samsung" ? <ScenarioSimulator /> : <SellThroughChart flowKey={activeFlowId} />}
+        {activeFlowId === "simulate-samsung"
+          ? <ScenarioSimulator />
+          : <SellThroughChart flowKey={activeFlowId} onWeekClick={setSelectedWeek} />}
       </div>
 
       <AlertTicker alerts={alerts} />
-      {/* 3-column row of operational panels — equal-width grid so each cell
-          shares the same height. Outer <main> is the only scroll container,
-          so per-column overflow-y-auto wrappers were removed (single scrollbar). */}
-      <div className="grid grid-cols-3 gap-2 px-4 pb-4 min-h-[480px]">
+      {/* 3-column row of operational panels — equal-width grid on desktop,
+          stacked single column on mobile so each card is full-width and
+          comfortably tappable. Outer <main> is the only scroll container. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-4 pb-4 sm:min-h-[480px]">
           <FlyoutCard
             title="Agents in Action"
             subtitle="Live execution monitor"
@@ -955,6 +962,8 @@ export default function Home() {
         </div>
       )}
       </main>
+      {/* Week detail slide-in panel — fires when user clicks a chart week. */}
+      <WeekDetailPanel row={selectedWeekRow} onClose={() => setSelectedWeek(null)} />
       {/* BigQuery Explorer modal — full-screen overlay; Esc / click-outside / X to close */}
       {bqOpen && (
         <div

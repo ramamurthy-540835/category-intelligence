@@ -130,7 +130,7 @@ interface Props {
 
 const SectionLabel = ({ children, mt }: { children: React.ReactNode; mt?: string }) => (
   <p
-    className={"px-4 text-[10px] font-semibold tracking-widest uppercase mb-1.5 " + (mt || "")}
+    className={"px-4 text-[9px] font-semibold tracking-widest uppercase mb-1.5 " + (mt || "")}
     style={{ color: "var(--bby-sidebar-label, #475569)" }}
   >
     {children}
@@ -179,8 +179,8 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
               className={
                 "flex items-center gap-2.5 text-left w-full transition-colors duration-150 " +
                 (isActive
-                  ? "py-2 pl-2.5 pr-3 rounded-r-md font-medium"
-                  : "px-3 py-2 rounded-md hover:bg-[#1c2230] hover:text-[#e2e8f0]")
+                  ? "py-1.5 pl-2.5 pr-3 rounded-r-md font-medium"
+                  : "px-3 py-1.5 rounded-md hover:bg-[#1c2230] hover:text-[#e2e8f0]")
               }
               style={
                 isActive
@@ -195,10 +195,10 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
                     }
               }
             >
-              <span className="text-base flex-shrink-0 leading-none w-4 text-center" aria-hidden="true">
+              <span className="text-[12px] flex-shrink-0 leading-none w-4 text-center" aria-hidden="true">
                 {flow.icon}
               </span>
-              <span className="flex-1 truncate text-[13px]">{flow.label}</span>
+              <span className="flex-1 truncate text-[11px]">{flow.label}</span>
               {hasAlert(flow) && (
                 <span
                   className="w-[18px] h-[18px] rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0"
@@ -224,10 +224,10 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
             className="flex items-center gap-2.5 px-3 py-1.5 rounded-md text-left w-full transition-colors hover:bg-[#1c2230] hover:text-[#e2e8f0]"
             style={{ color: "var(--bby-muted, #64748b)" }}
           >
-            <span className="text-sm flex-shrink-0 leading-none w-4 text-center" aria-hidden="true">
+            <span className="text-[11px] flex-shrink-0 leading-none w-4 text-center" aria-hidden="true">
               {action.icon}
             </span>
-            <span className="text-[12px]">{action.label}</span>
+            <span className="text-[10px]">{action.label}</span>
           </button>
         ))}
       </div>

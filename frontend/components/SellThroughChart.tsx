@@ -14,7 +14,7 @@ import {
   type TooltipProps,
 } from "recharts";
 
-const SELL_THROUGH_DATA = [
+export const SELL_THROUGH_DATA = [
   { week: "W40", Samsung: 420, Sony: 180, LG: 160, Forecast: 400 },
   { week: "W42", Samsung: 380, Sony: 195, LG: 145, Forecast: 390 },
   { week: "W44", Samsung: 450, Sony: 210, LG: 130, Forecast: 420 },
@@ -24,6 +24,8 @@ const SELL_THROUGH_DATA = [
   { week: "W52", Samsung: 560, Sony: 200, LG: 105, Forecast: 520 },
 ];
 const LAST_INDEX = SELL_THROUGH_DATA.length - 1;
+
+export type SellThroughRow = (typeof SELL_THROUGH_DATA)[number];
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────
 function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
@@ -80,9 +82,15 @@ function makePulseDot(color: string, classSuffix: string) {
 interface Props {
   /** When this prop changes the chart re-mounts and re-animates. */
   flowKey?: string | number;
+  /** Fires when a user clicks anywhere on the chart at a data X. */
+  onWeekClick?: (week: string) => void;
 }
 
-export default function SellThroughChart({ flowKey }: Props) {
+export default function SellThroughChart({ flowKey, onWeekClick }: Props) {
+  const handleChartClick = (state: any) => {
+    const week = state?.activeLabel;
+    if (typeof week === "string" && week) onWeekClick?.(week);
+  };
   return (
     <div
       style={{
@@ -125,6 +133,8 @@ export default function SellThroughChart({ flowKey }: Props) {
           key={flowKey}
           data={SELL_THROUGH_DATA}
           margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
+          onClick={handleChartClick}
+          style={{ cursor: onWeekClick ? "pointer" : undefined }}
         >
           <defs>
             <linearGradient id="samsung-gradient" x1="0" y1="0" x2="0" y2="1">

@@ -94,18 +94,18 @@ export default function FlyoutCard({
 
       {/* ── FLYOUT PANEL ───────────────────────────────── */}
       {isOpen && (
-        <div
-          ref={overlayRef}
-          className="fixed inset-0 z-50 flex items-stretch justify-end"
-          style={{ background: "rgba(0,0,0,0.65)" }}
-          onClick={(e) => { if (e.target === overlayRef.current) setIsOpen(false); }}
-        >
+        <>
+          {/* Backdrop — fixed full-viewport, sits ABOVE the page header / ticker */}
           <div
-            className="relative flex flex-col bg-[#0d1117] border-l border-[#2d3748]"
-            style={{
-              width: "40%", minWidth: "480px", maxWidth: "720px",
-              animation: "flyout-in 220ms cubic-bezier(0.16,1,0.3,1)",
-            }}
+            ref={overlayRef}
+            className="fixed inset-0 z-[9999]"
+            style={{ background: "rgba(0,0,0,0.7)" }}
+            onClick={() => setIsOpen(false)}
+          />
+          {/* Panel — fixed, full-screen on mobile, 480px on tablet, 40% (cap 720) on desktop */}
+          <div
+            className="fixed top-0 right-0 h-full z-[10000] flex flex-col bg-[#0d1117] border-l border-[#2d3748] shadow-2xl w-full sm:w-[480px] lg:w-[40%] lg:max-w-[720px]"
+            style={{ animation: "flyout-in 220ms cubic-bezier(0.16,1,0.3,1)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-3 bg-[#003087] flex-shrink-0">
@@ -137,7 +137,7 @@ export default function FlyoutCard({
               </p>
             </div>
           </div>
-        </div>
+        </>
       )}
 
       <style>{`
