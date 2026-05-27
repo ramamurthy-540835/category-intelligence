@@ -25,7 +25,16 @@ export async function GET(req: NextRequest, { params }: { params: { tab: string 
     const response = await fetch(`${backendUrl}/dashboard/${tab}${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
     if (!response.ok) {
       const detail = await response.text();
-      return NextResponse.json({ error: 'Backend fetch failed', backend_url: backendUrl, detail }, { status: 502 });
+      return NextResponse.json({
+        tab,
+        source: 'fallback',
+        alerts: [],
+        rows: [],
+        data: [],
+        error: `Backend unavailable (${response.status})`,
+        detail,
+        backend_url: backendUrl,
+      }, { status: 200 });
     }
 
     const data = await response.json();
@@ -41,4 +50,3 @@ export async function GET(req: NextRequest, { params }: { params: { tab: string 
     }, { status: 200 });
   }
 }
-

@@ -45,7 +45,7 @@ ACTIVE_FEED_RUN_ID = None
 # --- Environment Variable Validation and Logging ---
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
-BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET")
+BIGQUERY_DATASET = os.environ.get("BIGQUERY_DATASET", "category_intelligence")
 SKU_MASTER_TABLE_ENV = os.environ.get("SKU_MASTER_TABLE")
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
 VERTEX_MODEL = os.environ.get("VERTEX_MODEL")
@@ -138,14 +138,17 @@ def validate_environment():
     errors = []
     if not EFFECTIVE_PROJECT_ID:
         errors.append(get_structured_error("GCP_PROJECT_MISSING", "GCP Project ID not set.", "Set GOOGLE_CLOUD_PROJECT or GCP_PROJECT_ID in .env.local."))
-    if not BIGQUERY_DATASET:
-        errors.append(get_structured_error("BIGQUERY_DATASET_MISSING", "BIGQUERY_DATASET not set.", "Set BIGQUERY_DATASET in .env.local."))
+    # BIGQUERY_DATASET has a default ("category_intelligence"), so it should
+    # not hard-fail local/demo startup when omitted from env.
     if not SKU_MASTER_TABLE_ENV:
-        errors.append(get_structured_error("SKU_MASTER_TABLE_MISSING", "SKU_MASTER_TABLE not set.", "Set SKU_MASTER_TABLE in .env.local."))
+        config_status["sku_master_table"] = f"{EFFECTIVE_PROJECT_ID}.{BIGQUERY_DATASET}.sku_master" if EFFECTIVE_PROJECT_ID else f"{BIGQUERY_DATASET}.sku_master"
+    # SERPAPI and Vertex are optional for read-only dashboard/status endpoints.
+    # Keep them as warnings in config instead of blocking all agent UI routes.
+    warnings = []
     if not SERPAPI_KEY:
-        errors.append(SERPAPI_KEY_MISSING_RESPONSE)
+        warnings.append(SERPAPI_KEY_MISSING_RESPONSE)
     if not VERTEX_MODEL or not VERTEX_AI_LOCATION:
-        errors.append(VERTEX_AI_CONFIG_ERROR_RESPONSE)
+        warnings.append(VERTEX_AI_CONFIG_ERROR_RESPONSE)
 
     if errors:
         config_status["status"] = "error"
@@ -169,6 +172,8 @@ def validate_environment():
         if errors:
             config_status["status"] = "error"
             config_status["errors"] = errors
+    if warnings:
+        config_status["warnings"] = warnings
 
     return config_status
 
@@ -404,6 +409,9 @@ async def dashboard(
     stock: str = "all",
     limit: int = 200,
     offset: int = 0,
+    start_date: str = "2024-10-01",
+    end_date: str = "2026-03-31",
+    categories: str = "Home Appliance,Mobile,Accessories",
 ):
     allowed_tabs = {"overview", "inventory", "dc-stock", "promos", "competitive", "vendor"}
     if tab not in allowed_tabs:
@@ -452,16 +460,20 @@ async def dashboard(
                 CAST(COALESCE(in_stock, TRUE) AS BOOL) AS in_stock,
                 snapshot_time
               FROM `{snapshots_table}`
-              WHERE snapshot_time = (
-                SELECT MAX(snapshot_time)
-                FROM `{snapshots_table}`
-              )
+              WHERE DATE(snapshot_time) BETWEEN DATE(@start_date) AND DATE(@end_date)
               QUALIFY ROW_NUMBER() OVER (
                 PARTITION BY sku_id
-                ORDER BY CAST(competitor_price AS FLOAT64) DESC
+                ORDER BY snapshot_time DESC, CAST(competitor_price AS FLOAT64) DESC
               ) = 1
             )
             WHERE (@q = '' OR LOWER(sku_id) LIKE LOWER(CONCAT('%', @q, '%')) OR LOWER(name) LIKE LOWER(CONCAT('%', @q, '%')))
+              AND (
+                @categories = '' OR EXISTS (
+                  SELECT 1
+                  FROM UNNEST(SPLIT(LOWER(@categories), ',')) AS c
+                  WHERE TRIM(c) != '' AND LOWER(name) LIKE CONCAT('%', TRIM(c), '%')
+                )
+              )
               AND (
                 @stock = 'all' OR
                 (@stock = 'in' AND in_stock = TRUE) OR
@@ -470,7 +482,15 @@ async def dashboard(
             ORDER BY ABS(price_gap_pct) DESC
             LIMIT @limit OFFSET @offset
         """
-        rows = await bq_client_instance.query(sql, {"q": q, "stock": stock, "limit": limit, "offset": offset})
+        rows = await bq_client_instance.query(sql, {
+            "q": q,
+            "stock": stock,
+            "limit": limit,
+            "offset": offset,
+            "start_date": start_date,
+            "end_date": end_date,
+            "categories": categories,
+        })
         timestamp = rows[0].get("snapshot_time") if rows else None
 
         alerts = []
@@ -538,6 +558,55 @@ async def dashboard(
                 "rows": [],
                 "error": "Live feed unavailable. Check GCP authentication and SERPAPI connectivity."
             }, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+@app.get("/dashboard/sell-through")
+async def dashboard_sell_through(
+    start_date: str = "2024-10-01",
+    end_date: str = "2026-03-31",
+    categories: str = "Home Appliance,Mobile,Accessories",
+):
+    try:
+        check_gcp_auth()
+        project = EFFECTIVE_PROJECT_ID
+        dataset = BIGQUERY_DATASET
+        snapshots_table = f"{project}.{dataset}.competitor_price_snapshots"
+        if not check_bq_table_exists(snapshots_table):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=BIGQUERY_TABLE_MISSING_ERROR_RESPONSE_TEMPLATE.format(table_name=snapshots_table),
+            )
+
+        sql = f"""
+            SELECT
+              CONCAT('W', LPAD(CAST(EXTRACT(ISOWEEK FROM snapshot_time) AS STRING), 2, '0')) AS week,
+              SUM(CASE WHEN LOWER(sku_name) LIKE '%samsung%' THEN 1 ELSE 0 END) AS Samsung,
+              SUM(CASE WHEN LOWER(sku_name) LIKE '%sony%' THEN 1 ELSE 0 END) AS Sony,
+              SUM(CASE WHEN LOWER(sku_name) LIKE '%lg%' THEN 1 ELSE 0 END) AS LG,
+              COUNT(*) AS Forecast
+            FROM `{snapshots_table}`
+            WHERE DATE(snapshot_time) BETWEEN DATE(@start_date) AND DATE(@end_date)
+              AND (
+                @categories = '' OR EXISTS (
+                  SELECT 1
+                  FROM UNNEST(SPLIT(LOWER(@categories), ',')) AS c
+                  WHERE TRIM(c) != '' AND LOWER(sku_name) LIKE CONCAT('%', TRIM(c), '%')
+                )
+              )
+            GROUP BY week
+            ORDER BY week
+        """
+        rows = await bq_client_instance.query(sql, {
+            "start_date": start_date,
+            "end_date": end_date,
+            "categories": categories,
+        })
+        return {"rows": rows, "source": "bigquery-live"}
+    except HTTPException as e:
+        return JSONResponse(content=e.detail, status_code=e.status_code)
+    except Exception as e:
+        logger.error(f"Dashboard sell-through failed: {e}")
+        return JSONResponse(content={"rows": [], "source": "fallback", "error": str(e)}, status_code=status.HTTP_200_OK)
 
 # New endpoint to get agent events and status
 @app.get("/agent/status")

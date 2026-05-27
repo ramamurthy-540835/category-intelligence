@@ -4,10 +4,10 @@ import { useAgentStream, AgentStep, Status } from "@/lib/sse/useSSE";
 import ReactMarkdown from 'react-markdown';
 
 const DEMO_FLOWS = [
-  {label: 'Category Overview', q: 'Give me a full Q4 category overview for Home Theater'},
+  {label: 'Category Overview', q: 'Give me a full category overview from Q4 2024 through Q1 2026 across Home Appliance, Mobile, and Accessories'},
   {label: 'LG C3 Diagnosis', q: 'Why is LG C3 OLED underperforming?'},
   {label: 'Price vs Amazon', q: 'Show Samsung QN85C price gap vs Amazon'},
-  {label: 'Gen Z Trends', q: 'What is the Gen Z interest in Home Theater SKUs?'},
+  {label: 'Gen Z Trends', q: 'What is the Gen Z interest in Home Appliance, Mobile, and Accessories SKUs?'},
   {label: 'Co-op Risk', q: 'Which vendor co-op budgets are at expiry risk?'},
   {label: 'Spring Assortment', q: 'Which SKUs should we cut in spring assortment?'},
 ];
@@ -115,7 +115,7 @@ export function ChatInterface() {
       <div className="flex gap-1.5 mt-auto">
         <input
           className="flex-1 bg-gray-800 rounded px-3 py-1.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          placeholder="Ask anything about Home Theater category..."
+          placeholder="Ask anything about Home Appliance, Mobile, and Accessories..."
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
@@ -132,4 +132,3 @@ export function ChatInterface() {
     </div>
   );
 }
-

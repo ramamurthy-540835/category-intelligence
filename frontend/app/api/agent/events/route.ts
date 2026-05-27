@@ -11,10 +11,12 @@ export async function GET(req: NextRequest) {
   if (!runId) return NextResponse.json({ run_id: runId, events: [] }, { status: 200 });
   try {
     const res = await fetch(`${getBackendUrl()}/agent/events?run_id=${encodeURIComponent(runId)}`, { cache: 'no-store' });
+    if (!res.ok) {
+      return NextResponse.json({ run_id: runId, events: [] }, { status: 200 });
+    }
     const text = await res.text();
-    return new NextResponse(text, { status: res.status, headers: { 'Content-Type': 'application/json' } });
+    return new NextResponse(text, { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
-    return NextResponse.json({ run_id: runId, events: [], error: String(e), backend_url: getBackendUrl() }, { status: 502 });
+    return NextResponse.json({ run_id: runId, events: [], error: String(e), backend_url: getBackendUrl() }, { status: 200 });
   }
 }
-

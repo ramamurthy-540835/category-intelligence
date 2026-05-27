@@ -13,6 +13,7 @@ import SellThroughChart, { SELL_THROUGH_DATA } from "@/components/SellThroughCha
 import ScenarioSimulator from "@/components/ScenarioSimulator";
 import WeekDetailPanel from "@/components/WeekDetailPanel";
 import { AgentStep, Status } from "@/lib/sse/useSSE"; // Assuming Status and AgentStep are exported
+import { BUSINESS_GLOSSARY } from "@/lib/metrics/glossary";
 
 type Alert = { priority: "P1" | "P2"; sku: string; msg: string };
 type Row = {
@@ -78,6 +79,14 @@ const SERPAPI_KEY_MISSING_ERROR_TYPE = "CONFIG_ERROR"; // Assuming SERPAPI_KEY m
 const SERPAPI_CONNECTIVITY_ERROR_TYPE = "SERPAPI_CONNECTIVITY_ERROR";
 
 export default function Home() {
+  const HelpIcon = ({ text }: { text: string }) => (
+    <span className="relative inline-flex items-center group ml-1">
+      <span className="w-4 h-4 rounded-full border border-slate-500 text-slate-300 text-[10px] inline-flex items-center justify-center cursor-help">?</span>
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block whitespace-nowrap bg-slate-900 text-slate-200 text-[10px] px-2 py-1 rounded border border-slate-700 z-20">
+        {text}
+      </span>
+    </span>
+  );
   const hasInitialized = useRef(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [source, setSource] = useState<string>("loading");
@@ -129,7 +138,15 @@ export default function Home() {
   };
 
   const loadOverview = useCallback(async () => {
-    const params = new URLSearchParams({ q: query, stock: stockFilter, limit: String(fetchSize), offset: "0" });
+    const params = new URLSearchParams({
+      q: query,
+      stock: stockFilter,
+      limit: String(fetchSize),
+      offset: "0",
+      start_date: "2024-10-01",
+      end_date: "2026-05-27",
+      categories: "TV,Soundbar,Receiver,Streaming,Projector,Headphones",
+    });
     const res = await fetch(`/api/dashboard/overview?${params.toString()}`, { cache: "no-store" });
     
     if (!res.ok) {
@@ -444,6 +461,7 @@ export default function Home() {
   const requestedNum = Number(progressSummary.requested || 0);
   const activeNum = Number(progressSummary.active_skus || 0);
   const externalAdded = Math.max(0, requestedNum - activeNum);
+  const noRunYet = !progressSummary.run_id && agentEvents.length === 0;
   const enrichSuccessEvent = agentEvents.find((e) => e.stage === "ENRICHING" && e.status === "SUCCESS");
   const matchedCount = enrichSuccessEvent ? Number((enrichSuccessEvent.message.match(/(\d+)/)?.[1] || 0)) : 0;
   const latestErrorEvent = agentEvents.find((e) => e.status === "ERROR");
@@ -458,13 +476,20 @@ export default function Home() {
     feedErrorText.includes("sku_master");
   const isSerpApiDown = feedStatus.error_type === SERPAPI_CONNECTIVITY_ERROR_TYPE ||
     (feedStatus.error_type === SERPAPI_KEY_MISSING_ERROR_TYPE && feedErrorText.includes("serpapi"));
+  const systemErrorMessage = isSystemError
+    ? [
+        "Agent functionality is blocked.",
+        feedStatus.error_type ? `Type: ${feedStatus.error_type}` : null,
+        feedStatus.error ? `Detail: ${feedStatus.error}` : null,
+      ].filter(Boolean).join(" ")
+    : null;
 
   // Update agent status and steps based on backend events
   useEffect(() => {
     if (isSystemError) {
       setAgentStatus('error');
-      setAgentSteps([{step: 'error', content: 'System authentication error. Agent cannot run.'}]);
-      setAgentError("GCP Authentication Missing or Configuration Error. Agent functionality is blocked.");
+      setAgentSteps([{step: 'error', content: systemErrorMessage || 'System error. Agent cannot run.'}]);
+      setAgentError(systemErrorMessage || "System error. Agent functionality is blocked.");
     } else if (latestEvent) {
       setAgentStatus(mapBackendStageToAgentStep(latestEvent.stage) as Status);
       setAgentSteps(prev => {
@@ -484,7 +509,7 @@ export default function Home() {
       setAgentSteps([]);
       setAgentError(null);
     }
-  }, [latestEvent, isSystemError]);
+  }, [latestEvent, isSystemError, systemErrorMessage]);
 
 
   // Demo KPI tiles — values mirror the Azure reference build until backend KPI
@@ -544,14 +569,66 @@ export default function Home() {
   }, []);
 
   const kpiTiles = FLOW_KPIS[activeFlowId] ?? FLOW_KPIS["category-overview"];
+  const KPI_HELP: Record<string, string> = {
+    "CATEGORY REV": "Total category revenue for the selected scope and time window.",
+    "AVG MARGIN %": "Average gross margin percent across included SKUs.",
+    "INV. HEALTH": "Inventory health score based on days-of-supply and stock balance.",
+    "FCST ACCY": "Forecast Accuracy: how close forecasted units were to actual sales. Higher is better.",
+    "BELOW FCST": "Count of SKUs performing below forecast in the selected period.",
+    "OVERSTK COST": "Estimated cost impact from excess inventory above healthy levels.",
+    "PROMO ROAS": "Return on ad spend for promotions (revenue generated per $1 spent).",
+    "STOCKOUT RISK": "SKUs at risk of stockout within the near-term horizon.",
+    "C3 VS FCST": "LG C3 sell-through variance versus forecast.",
+    "DAYS SUPPLY": "Estimated days inventory will last at current sell-through rate.",
+    "PROMO LIFT": "Incremental sales uplift driven by promotions.",
+    "PROJ RECOVERY": "Projected recoverable unit sales from suggested actions.",
+  };
+  const abbrevHint = (label: string) => {
+    if (label.includes("FCST")) return BUSINESS_GLOSSARY.FCST_ACCY.business_meaning;
+    if (label.includes("ROAS")) return BUSINESS_GLOSSARY.ROAS.business_meaning;
+    if (label.includes("CO-OP")) return BUSINESS_GLOSSARY.CO_OP.business_meaning;
+    if (label.includes("INV.")) return BUSINESS_GLOSSARY.INV_HEALTH.business_meaning;
+    if (label.includes("DoS")) return BUSINESS_GLOSSARY.DOS.business_meaning;
+    return null;
+  };
+  const KPI_DETAIL: Record<string, { desc: string; drivers: string; action: string }> = {
+    "CO-OP AVAILABLE": {
+      desc: "Remaining vendor co-op funds available in current cycle across active partners.",
+      drivers: "Unspent allocations from Samsung, LG, Sony, and Bose.",
+      action: "Prioritize high-ROAS campaigns before expiry windows close.",
+    },
+    "EXPIRING SOON": {
+      desc: "Co-op dollars nearing expiration and at risk of loss.",
+      drivers: "Largest near-term risk is Hisense budget with low utilization.",
+      action: "Launch fast-turn digital placements tied to eligible SKUs this week.",
+    },
+    "BEST ROAS": {
+      desc: "Top performing channel return on ad spend among active campaign types.",
+      drivers: "SMS shows strongest conversion efficiency in current cohort.",
+      action: "Scale SMS on SKUs with low inventory risk and positive margin.",
+    },
+    "CAMPAIGNS READY": {
+      desc: "Campaign drafts prepared and waiting for approval or scheduling.",
+      drivers: "Audience/creative complete; pending business approval gates.",
+      action: "Approve highest-impact campaigns first and stagger launch by inventory coverage.",
+    },
+  };
+  const [selectedKpiLabel, setSelectedKpiLabel] = useState<string | null>(null);
+  const selectedKpiDetail = selectedKpiLabel ? KPI_DETAIL[selectedKpiLabel] : null;
 
   // Quick Actions and demo flows now live in <DemoFlowsSidebar />, so the
   // inline panel that used to sit above AgentControlCenter has been removed.
 
   const [bqOpen, setBqOpen] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
+  const [weekWindow, setWeekWindow] = useState<number>(13);
+  const [selectedPipelineStage, setSelectedPipelineStage] = useState<string | null>(null);
+  const [chartRows, setChartRows] = useState<Array<{ week: string; Samsung: number; Sony: number; LG: number; Forecast: number }>>([]);
+  const selectedStageEvent = selectedPipelineStage
+    ? agentEvents.find((e) => e.stage === selectedPipelineStage) || null
+    : null;
   const selectedWeekRow = selectedWeek
-    ? SELL_THROUGH_DATA.find((r) => r.week === selectedWeek) ?? null
+    ? chartRows.find((r) => r.week === selectedWeek) ?? SELL_THROUGH_DATA.find((r) => r.week === selectedWeek) ?? null
     : null;
   useEffect(() => {
     if (!bqOpen) return;
@@ -573,14 +650,14 @@ export default function Home() {
       <main className="flex-1 min-w-0 flex flex-col overflow-y-auto overflow-x-hidden">
       <LiveTicker alerts={alerts} />
       {/* Brand bar — Best Buy royal blue (#003087) with yellow logo block and Adept attribution */}
-      <header className="px-4 h-14 flex items-center justify-between bg-bby-blue">
-        <div className="flex items-center gap-3">
+      <header className="px-4 min-h-14 py-2 flex flex-wrap items-center justify-between gap-2 bg-bby-blue">
+        <div className="flex items-center gap-3 flex-wrap">
           <span className="inline-flex items-center justify-center w-10 h-10 rounded-sm bg-bby-yellow text-bby-blue font-extrabold text-[10px] leading-tight text-center">BEST<br/>BUY</span>
           <span className="text-white font-semibold text-[13px]">Category Intelligence</span>
           <span className="px-2 py-0.5 rounded text-[9px] font-bold tracking-wider text-bby-yellow border border-bby-yellow/30">POWERED BY ADEPT AI</span>
-          <span className="hidden md:inline text-[11px] text-white/70 ml-3">Home Theater <span className="text-white/40">›</span> Q4 2024 Review</span>
+          <span className="hidden md:inline text-[11px] text-white/70 ml-3">Home Appliance + Mobile + Accessories <span className="text-white/40">›</span> Q4 2024 to Q1 2026</span>
         </div>
-        <div className="flex items-center gap-2 text-[12px]">
+        <div className="flex items-center gap-2 text-[12px] flex-wrap">
           <button
             type="button"
             onClick={() => setBqOpen(true)}
@@ -596,7 +673,7 @@ export default function Home() {
       </header>
 
       {/* Top navigation tabs — Category / Promotions / Loyalty / Returns */}
-      <nav className="px-6 flex items-center gap-1 text-[12px] bg-bby-dark border-b border-[var(--bby-border-subtle)]">
+      <nav className="px-6 flex items-center gap-1 text-[12px] bg-bby-dark border-b border-[var(--bby-border-subtle)] overflow-x-auto">
         {topTabs.map((t) => (
           <button
             key={t.id}
@@ -629,24 +706,41 @@ export default function Home() {
       {/* KPI scorecard row — 4 tiles mirroring Azure reference */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 px-4 py-2 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
         {kpiTiles.map((kpi) => (
-          <div
+          <button
             key={kpi.label}
+            type="button"
+            onClick={() => setSelectedKpiLabel((prev) => (prev === kpi.label ? null : kpi.label))}
             className="rounded-md px-3 py-2"
-            style={{ background: "var(--bby-kpi-bg)", border: "1px solid var(--bby-kpi-border)" }}
+            style={{
+              background: "var(--bby-kpi-bg)",
+              border: `1px solid ${selectedKpiLabel === kpi.label ? "#60a5fa" : "var(--bby-kpi-border)"}`,
+              textAlign: "left",
+            }}
           >
             <div className="text-[9px] tracking-widest uppercase font-semibold" style={{ color: "var(--bby-kpi-label)" }}>{kpi.label}</div>
+            <div className="mt-0.5">
+              <HelpIcon text={[KPI_HELP[kpi.label], abbrevHint(kpi.label)].filter(Boolean).join(" ")} />
+            </div>
             <div className="text-[20px] font-bold leading-none mt-0.5 text-white">{kpi.value}</div>
             <div className={"text-[10px] mt-0.5 " + (kpi.color === "green" ? "text-emerald-400" : "text-red-400")}>{kpi.delta}</div>
-          </div>
+          </button>
         ))}
       </div>
+      {selectedKpiDetail && (
+        <div className="mx-4 mb-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] text-slate-200">
+          <div className="font-semibold text-white mb-1">{selectedKpiLabel}</div>
+          <div><span className="text-slate-400">Description:</span> {selectedKpiDetail.desc}</div>
+          <div><span className="text-slate-400">Key Drivers:</span> {selectedKpiDetail.drivers}</div>
+          <div><span className="text-slate-400">Recommended Action:</span> {selectedKpiDetail.action}</div>
+        </div>
+      )}
 
       {/* Trend chart by default; swaps to a live scenario simulator while
           the "Simulate: Samsung" demo flow is active. */}
       <div className="px-4 pt-2 pb-3 bg-bby-dark border-b border-[var(--bby-border-subtle)]">
         {activeFlowId === "simulate-samsung"
           ? <ScenarioSimulator />
-          : <SellThroughChart flowKey={activeFlowId} onWeekClick={setSelectedWeek} />}
+          : <SellThroughChart flowKey={activeFlowId} onWeekClick={setSelectedWeek} weekWindow={weekWindow} onWeekWindowChange={setWeekWindow} onDataChange={setChartRows} />}
       </div>
 
       <AlertTicker alerts={alerts} />
@@ -658,10 +752,9 @@ export default function Home() {
             title="Agents in Action"
             subtitle="Live execution monitor"
             icon="🔄"
-            badge={
-              <span
+            badge={<><HelpIcon text="Live agent stage, throughput, and error counters." /><span
                 className={
-                  "text-[11px] " +
+                  "text-[11px] ml-2 " +
                   (progressSummary.current_status === "ERROR" ? "text-red-400"
                     : progressSummary.current_status === "RUNNING" ? "text-amber-300"
                     : progressSummary.current_status === "SUCCESS" ? "text-emerald-300"
@@ -669,8 +762,7 @@ export default function Home() {
                 }
               >
                 {progressSummary.current_stage || "IDLE"}
-              </span>
-            }
+              </span></>}
             preview={
               <div className="text-[10px] leading-relaxed text-[#64748b] w-full">
                 <div className="flex justify-between mb-0.5">
@@ -679,8 +771,7 @@ export default function Home() {
                     {(() => {
                       const stage = progressSummary.current_stage || 'IDLE';
                       const status = progressSummary.current_status || '';
-                      // Hide "IDLE IDLE" / dupe collapses to just the stage name.
-                      if (!status || status === stage) return stage;
+                      if ((stage === "IDLE" && status === "IDLE") || !status || status === stage) return stage;
                       return `${stage} ${status}`;
                     })()}
                   </span>
@@ -732,35 +823,52 @@ export default function Home() {
                 else if (isCurrent && !isError) bgColor = 'bg-blue-500 animate-pulse';
                 else if (isCompleted) bgColor = 'bg-green-500';
 
+                const isSelected = selectedPipelineStage === stage;
                 return (
-                  <div key={stage} className={`px-2 py-1 rounded-md ${bgColor} text-white text-center`}>
+                  <button
+                    key={stage}
+                    type="button"
+                    onClick={() => setSelectedPipelineStage(stage)}
+                    className={`px-2 py-1 rounded-md ${bgColor} text-white text-center border ${isSelected ? 'border-white' : 'border-transparent'} hover:border-slate-200`}
+                    title={`Click to inspect ${stage}`}
+                  >
                     <div className="text-[10px] opacity-90 flex items-center justify-center gap-1">
                       <span>{isError ? "✕" : isCompleted ? "✓" : isCurrent ? "●" : "○"}</span>
                       <span>{stage.substring(0, 3)}</span>
                     </div>
                     <div className="text-[9px] text-slate-100/90">{String(stageStatus).toLowerCase()}</div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
+            {selectedPipelineStage && (
+              <div className="mb-3 bg-slate-800 rounded p-2 text-[10px] text-slate-300">
+                <div className="font-semibold text-slate-200 mb-1">Stage Detail: {selectedPipelineStage}</div>
+                <div>Status: <span className="text-slate-100">{selectedStageEvent?.status || "pending"}</span></div>
+                <div>Message: <span className="text-slate-100">{selectedStageEvent?.message || "No events for this stage yet."}</span></div>
+                {selectedStageEvent?.error_type && <div>Error Type: <span className="text-red-300">{selectedStageEvent.error_type}</span></div>}
+                {selectedStageEvent?.fix && <div>Fix: <span className="text-amber-300">{selectedStageEvent.fix}</span></div>}
+                <div className="mt-1 text-slate-400">Business Terms: <span className="text-slate-200">{BUSINESS_GLOSSARY.FCST_ACCY.label}</span> = {BUSINESS_GLOSSARY.FCST_ACCY.business_meaning}</div>
+              </div>
+            )}
 
             {/* Metrics Cards */}
             <div className="grid grid-cols-2 gap-2 mb-3">
               <div className="bg-slate-800 p-1.5 rounded">
                 <div className="text-slate-400 text-[10px]">Requested</div>
-                <div className="font-semibold text-white">{progressSummary.requested}</div>
+                <div className="font-semibold text-white">{noRunYet ? "--" : progressSummary.requested}</div>
               </div>
               <div className="bg-slate-800 p-1.5 rounded">
                 <div className="text-slate-400 text-[10px]">Active SKUs</div>
-                <div className="font-semibold text-white">{progressSummary.active_skus}</div>
+                <div className="font-semibold text-white">{noRunYet ? "--" : progressSummary.active_skus}</div>
               </div>
               <div className="bg-slate-800 p-1.5 rounded">
                 <div className="text-slate-400 text-[10px]">Processed</div>
-                <div className="font-semibold text-white">{progressSummary.processed_rows}</div>
+                <div className="font-semibold text-white">{noRunYet ? "--" : progressSummary.processed_rows}</div>
               </div>
               <div className="bg-slate-800 p-1.5 rounded">
                 <div className="text-slate-400 text-[10px]">Written</div>
-                <div className="font-semibold text-white">{progressSummary.written_rows}</div>
+                <div className="font-semibold text-white">{noRunYet ? "--" : progressSummary.written_rows}</div>
               </div>
               <div className="bg-slate-800 p-1.5 rounded">
                 <div className="text-slate-400 text-[10px]">Snapshot Rows</div>
@@ -773,8 +881,14 @@ export default function Home() {
             </div>
             <div className="mb-3 bg-slate-800 rounded p-2 text-[10px] text-slate-300">
               <div className="font-semibold text-slate-200 mb-1">Run Summary</div>
-              <div>Requested: <span className="text-slate-100">{requestedNum}</span> | Base Active: <span className="text-slate-100">{activeNum}</span> | External Added: <span className="text-slate-100">{externalAdded}</span></div>
-              <div>SerpAPI Matched: <span className="text-slate-100">{matchedCount}</span> | Written to BigQuery: <span className="text-slate-100">{progressSummary.written_rows}</span></div>
+              {noRunYet ? (
+                <div>No run started yet. Click <span className="text-slate-100">Run External Scan</span> to populate metrics.</div>
+              ) : (
+                <>
+                  <div>Requested: <span className="text-slate-100">{requestedNum}</span> | Base Active: <span className="text-slate-100">{activeNum}</span> | External Added: <span className="text-slate-100">{externalAdded}</span></div>
+                  <div>SerpAPI Matched: <span className="text-slate-100">{matchedCount}</span> | Written to BigQuery: <span className="text-slate-100">{progressSummary.written_rows}</span></div>
+                </>
+              )}
               {compactError && <div className="text-red-300 mt-1">Latest Error: {compactError}</div>}
             </div>
 
@@ -791,7 +905,7 @@ export default function Home() {
               <h5 className="font-semibold text-slate-300 mb-1">Current Stage</h5>
               <div className="flex items-center gap-2">
                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${progressSummary.current_status === 'SUCCESS' ? 'bg-green-600' : progressSummary.current_status === 'ERROR' ? 'bg-red-600' : progressSummary.current_status === 'RUNNING' ? 'bg-blue-600 animate-pulse' : 'bg-gray-700'}`}>
-                  {progressSummary.current_stage} [{progressSummary.current_status}]
+                  {progressSummary.current_stage}
                 </span>
                 <span className="text-slate-400 flex-1 truncate">{progressSummary.current_message}</span>
               </div>
@@ -832,11 +946,11 @@ export default function Home() {
             title="Live Pricing Intelligence"
             subtitle={isSystemError ? "System Error" : "bigquery-live"}
             icon="💹"
-            badge={
+            badge={<><HelpIcon text={`SKU price gaps, stock state, and recommended pricing actions. ${BUSINESS_GLOSSARY.DOS.label}: ${BUSINESS_GLOSSARY.DOS.business_meaning}`} />
               <span className={`text-[11px] ${isSystemError ? 'text-red-400' : 'text-[#94a3b8]'}`}>
                 {isSystemError ? "System Error" : `${filteredRows.length} SKUs`}
               </span>
-            }
+            </>}
             preview={
               filteredRows.length > 0 ? (
                 <div className="text-[10px] leading-relaxed w-full">
@@ -995,8 +1109,8 @@ export default function Home() {
       )}
       <AgentControlCenter
         status={isSystemError ? 'error' : agentStatus}
-        steps={isSystemError ? [{ step: 'error', content: 'System authentication error. Agent cannot run.' }] : agentSteps}
-        error={isSystemError ? "GCP Authentication Missing or Configuration Error. Agent functionality is blocked." : agentError}
+        steps={isSystemError ? [{ step: 'error', content: systemErrorMessage || 'System error. Agent cannot run.' }] : agentSteps}
+        error={isSystemError ? (systemErrorMessage || "System error. Agent functionality is blocked.") : agentError}
         alerts={alerts}
         agentEvents={agentEvents}
       />

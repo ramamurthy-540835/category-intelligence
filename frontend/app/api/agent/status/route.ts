@@ -9,10 +9,21 @@ function getBackendUrl() {
 export async function GET() {
   try {
     const res = await fetch(`${getBackendUrl()}/agent/status`, { cache: 'no-store' });
+    if (!res.ok) {
+      return NextResponse.json({
+        status: 'idle',
+        backend_status: res.status,
+        warning: 'Backend unavailable; running in UI-only mode.',
+      }, { status: 200 });
+    }
     const text = await res.text();
-    return new NextResponse(text, { status: res.status, headers: { 'Content-Type': 'application/json' } });
+    return new NextResponse(text, { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
-    return NextResponse.json({ status: 'error', error: String(e), backend_url: getBackendUrl() }, { status: 502 });
+    return NextResponse.json({
+      status: 'idle',
+      warning: 'Backend unavailable; running in UI-only mode.',
+      error: String(e),
+      backend_url: getBackendUrl(),
+    }, { status: 200 });
   }
 }
-

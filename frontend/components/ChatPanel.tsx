@@ -20,7 +20,7 @@ interface Message {
 const SUGGESTED_PROMPTS = [
   "Why is LG C3 underperforming?",
   "Show Samsung price vs Amazon",
-  "Compare Q4 promo ROAS",
+  "Compare Q4 promo ROAS (Return on Ad Spend)",
   "Which SKUs to cut in spring?",
 ];
 
@@ -225,7 +225,7 @@ export default function ChatPanel() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={isStreaming}
-          placeholder="Ask anything about Home Theater category..."
+          placeholder="Ask anything about Home Appliance, Mobile, and Accessories..."
           className="flex-1 rounded-lg px-3.5 py-2.5 text-white placeholder:text-[#475569] text-[13px] focus:outline-none focus:ring-1"
           style={{
             background: "var(--bby-chat-input-bg)",
@@ -251,4 +251,3 @@ export default function ChatPanel() {
     </section>
   );
 }
-

@@ -28,7 +28,7 @@ const DEMO_FLOWS: Flow[] = [
     icon: "⊕",
     label: "Category Overview",
     alert: true,
-    prompt: "Give me a full category overview for Q4 2024 — revenue, margin, inventory health, and forecast accuracy across all Home Theater SKUs.",
+    prompt: "Give me a full category overview from Q4 2024 through Q1 2026 — revenue, margin, inventory health, and forecast accuracy across Home Appliance, Mobile, and Accessories SKUs.",
     description: "Q4 performance snapshot across all brands and channels",
   },
   {
@@ -36,7 +36,7 @@ const DEMO_FLOWS: Flow[] = [
     icon: "♡",
     label: "Health Check",
     alert: true,
-    prompt: "Run a 90-day health check on the Home Theater category. Identify anomalies, overstock risks, and stockout threats using z-score analysis.",
+    prompt: "Run a 90-day health check across Home Appliance, Mobile, and Accessories. Identify anomalies, overstock risks, and stockout threats using z-score analysis.",
     description: "90-day anomaly detection with z-score analysis",
   },
   {
@@ -68,7 +68,7 @@ const DEMO_FLOWS: Flow[] = [
     icon: "📊",
     label: "Exec Review",
     alert: false,
-    prompt: "Generate a full executive review for Home Theater Q4 2024. Include competitive scorecard, digital friction summary, cycle recommendations, and a 30/60-day action plan.",
+    prompt: "Generate a full executive review for Q4 2024 through Q1 2026 across Home Appliance, Mobile, and Accessories. Include competitive scorecard, digital friction summary, cycle recommendations, and a 30/60-day action plan.",
     description: "C-suite narrative + 30/60-day action plan",
   },
   {
@@ -84,7 +84,7 @@ const DEMO_FLOWS: Flow[] = [
     icon: "🏷️",
     label: "Price vs Amazon",
     alert: true,
-    prompt: "Compare our prices vs Amazon across all Home Theater SKUs. Show the biggest gaps with unit-level margin impact and urgency scores.",
+    prompt: "Compare our prices vs Amazon across Home Appliance, Mobile, and Accessories SKUs. Show the biggest gaps with unit-level margin impact and urgency scores.",
     description: "Real-time price gaps + margin-at-risk",
   },
 ];
@@ -251,4 +251,3 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
     </aside>
   );
 }
-
