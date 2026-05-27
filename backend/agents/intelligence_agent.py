@@ -91,6 +91,7 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20, categ
         SELECT
             s.sku_id,
             m.sku_name,
+            'Google Shopping' AS competitor_name,
             CAST(m.our_price AS FLOAT64)        AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
             ROUND((m.our_price - s.competitor_price) / NULLIF(m.our_price, 0) * 100, 1) AS price_gap_pct,
@@ -142,6 +143,7 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20, categ
         SELECT
             s.sku_id,
             m.sku_name,
+            'Google Shopping' AS competitor_name,
             CAST(m.our_price AS FLOAT64)        AS our_price,
             CAST(s.competitor_price AS FLOAT64) AS market_price,
             ROUND(m.our_price - s.competitor_price, 2) AS price_gap_abs,

@@ -129,7 +129,7 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<"gap_desc" | "gap_asc" | "name">("gap_desc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [fetchSize, setFetchSize] = useState(100);
+  const [fetchSize, setFetchSize] = useState(20);
   const [selected, setSelected] = useState<Row | null>(null);
   const [selectedSku, setSelectedSku] = useState<Row | null>(null);
   const [skuDetails, setSkuDetails] = useState<any[]>([]);
@@ -142,11 +142,13 @@ export default function Home() {
   const [actionHistory, setActionHistory] = useState<ActionRecord[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [agentApiUnavailable, setAgentApiUnavailable] = useState(false);
   // Auto-refresh re-reads the latest BigQuery snapshot only — it never
   // triggers a SerpAPI scan. Manual scans go through the "Run External
   // Scan" button, which still calls refreshData().
-  const [autoRefreshMins, setAutoRefreshMins] = useState(5);
+  const [autoRefreshMins, setAutoRefreshMins] = useState(10);
   const [autoRefreshOn, setAutoRefreshOn] = useState(false);
+  const [agentPollFailures, setAgentPollFailures] = useState(0);
 
   // Agent state for AgentControlCenter
   const [agentStatus, setAgentStatus] = useState<Status>('idle');
@@ -384,9 +386,14 @@ export default function Home() {
   }, [source]);
 
   const fetchAgentEvents = useCallback(async (_runId: string | null) => {
+    if (agentApiUnavailable || agentPollFailures >= 3) return;
     try {
       if (_runId) {
         const eventsRes = await fetch(`/api/agent/events?run_id=${encodeURIComponent(_runId)}`, { cache: "no-store" });
+        if (eventsRes.status === 404) {
+          setAgentApiUnavailable(true);
+          return;
+        }
         if (eventsRes.ok) {
           const eventsData = await eventsRes.json();
           if (Array.isArray(eventsData.events) && eventsData.events.length > 0) {
@@ -397,9 +404,14 @@ export default function Home() {
       }
 
       const statusRes = await fetch(`/api/agent/status`, { cache: "no-store" });
+      if (statusRes.status === 404) {
+        setAgentApiUnavailable(true);
+        return;
+      }
       if (!statusRes.ok) throw new Error(`Failed to fetch events: ${statusRes.status}`);
       const statusData = await statusRes.json();
       if (Array.isArray(statusData.events)) {
+        setAgentPollFailures(0);
         setAgentEvents(statusData.events);
         if (statusData.active_run?.run_id) setCurrentRunId(statusData.active_run.run_id);
       } else {
@@ -407,9 +419,13 @@ export default function Home() {
       }
     } catch (e) {
       console.error("Failed to fetch agent events:", e);
-      // Keep existing events if fetch fails to avoid UI flicker to idle.
+      setAgentPollFailures((n) => n + 1);
+      if (agentPollFailures + 1 >= 3) {
+        setAgentApiUnavailable(true);
+        setActionMsg("Sync paused");
+      }
     }
-  }, []);
+  }, [agentApiUnavailable, agentPollFailures]);
 
   const refreshData = useCallback(async () => {
     if (refreshing) return;
@@ -417,7 +433,8 @@ export default function Home() {
     logEvent("sensing", `Triggered data refresh`);
     try {
       // Initiate the refresh and get the run_id
-      const refreshRes = await fetch(`/api/feeds/prices?limit=${fetchSize}&category=${encodeURIComponent(activeCategory)}`, { method: "POST", cache: "no-store" });
+      const manualLimit = Math.min(Math.max(fetchSize, 1), 20);
+      const refreshRes = await fetch(`/api/feeds/prices?limit=${manualLimit}&category=${encodeURIComponent(activeCategory)}`, { method: "POST", cache: "no-store" });
       
       if (!refreshRes.ok) {
         let errorData = { message: `HTTP error! status: ${refreshRes.status}`, error_type: "HTTP_ERROR" };
@@ -523,7 +540,6 @@ export default function Home() {
       hasInitialized.current = true;
       loadOverview();
       loadFeedStatus();
-      fetchAgentEvents(null);
     }
 
     if (!autoRefreshOn) return;
@@ -537,13 +553,13 @@ export default function Home() {
 
   // Fetch events periodically if a run is active
   useEffect(() => {
-    if (currentRunId) {
+    if (currentRunId && !agentApiUnavailable && agentPollFailures < 3) {
       const eventInterval = setInterval(() => {
         fetchAgentEvents(currentRunId);
       }, 5000); // Fetch events every 5 seconds
       return () => clearInterval(eventInterval);
     }
-  }, [currentRunId, fetchAgentEvents]);
+  }, [currentRunId, fetchAgentEvents, agentApiUnavailable, agentPollFailures]);
 
   useEffect(() => {
     loadTabData(activeTab, activeCategory);

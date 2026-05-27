@@ -17,6 +17,8 @@ from .bigquery_client import BigQueryClient, bq_client_instance
 log = logging.getLogger(__name__)
 
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
+PRICE_CACHE: Dict[str, Dict[str, Any]] = {}
+PRICE_CACHE_TTL_SECONDS = 7200
 
 # Define event stages
 class EventStage:
@@ -59,6 +61,8 @@ class CompetitorPriceFeed:
         "Bose soundbar",
         "Chromecast streaming device",
     ]
+    DEFAULT_REFRESH_LIMIT = 20
+    MAX_REFRESH_LIMIT = 20
 
     def __init__(self):
         if not SERPAPI_KEY:
@@ -118,6 +122,30 @@ class CompetitorPriceFeed:
         else:
             log.warning("BigQuery client not available or not initialized, skipping event logging to BigQuery.")
 
+    def _get_memory_cache(self, sku_id: str) -> Optional[Dict[str, Any]]:
+        if not sku_id:
+            return None
+        entry = PRICE_CACHE.get(sku_id)
+        if not entry:
+            return None
+        ts = entry.get("timestamp")
+        if not isinstance(ts, datetime.datetime):
+            return None
+        age = (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()
+        if age > PRICE_CACHE_TTL_SECONDS:
+            PRICE_CACHE.pop(sku_id, None)
+            return None
+        payload = entry.get("price_data")
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _set_memory_cache(self, sku_id: str, payload: Dict[str, Any]) -> None:
+        if not sku_id or not isinstance(payload, dict):
+            return
+        PRICE_CACHE[sku_id] = {
+            "price_data": dict(payload),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+        }
+
     async def _get_cached_snapshot_for_sku(self, sku_id: str, sku_name: str) -> Optional[Dict[str, Any]]:
         """Return latest cached competitor snapshot for a SKU, if available."""
         try:
@@ -158,7 +186,7 @@ class CompetitorPriceFeed:
                 "retailer_price": float(r.get("retailer_price") or 0.0),
                 "competitor_price": float(r.get("competitor_price") or 0.0),
                 "price_gap_pct": float(r.get("price_gap_pct") or 0.0),
-                "competitor_name": r.get("competitor_name") or self.COMPETITOR_NAME,
+                "competitor_name": self.COMPETITOR_NAME,
                 "search_query_used": "cached_snapshot",
                 "product_url": r.get("product_url"),
                 "image_url": r.get("image_url"),
@@ -169,8 +197,9 @@ class CompetitorPriceFeed:
             log.warning(f"Cached snapshot lookup failed for sku_id={sku_id} sku_name={sku_name}: {e}")
             return None
 
-    async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
+    async def fetch_skus_to_track(self, limit: int = DEFAULT_REFRESH_LIMIT) -> List[Dict[str, Any]]:
         """Fetches SKUs from BigQuery that are marked for tracking."""
+        limit = max(1, min(int(limit or self.DEFAULT_REFRESH_LIMIT), self.MAX_REFRESH_LIMIT))
         self._log_event(EventStage.FETCHING, "RUNNING", f"Loading active SKUs from {self.sku_master_table_id} with limit {limit}", {"requested_limit": limit})
         price_expr = "0.0"
         try:
@@ -203,6 +232,10 @@ class CompetitorPriceFeed:
         """Fetches live price for a single SKU using SerpApi."""
         sku_id = str(sku.get("sku_id") or "").strip()
         sku_name = str(sku.get("sku_name") or "").strip()
+        cached_memory = self._get_memory_cache(sku_id)
+        if cached_memory:
+            log.info(f"Reusing fresh cached SerpAPI snapshot for SKU {sku_id} (Cache Hit).")
+            return cached_memory
 
         # Build production-grade query candidates.
         # Prefer descriptive SKU names from master data and use SKU id only as fallback.
@@ -251,6 +284,7 @@ class CompetitorPriceFeed:
                 except (asyncio.TimeoutError, aiohttp.ClientError) as e:
                     cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
                     if cached:
+                        self._set_memory_cache(sku_id, cached)
                         self._log_event(
                             EventStage.ENRICHING,
                             "WARNING",
@@ -297,7 +331,7 @@ class CompetitorPriceFeed:
                 except ValueError:
                     log.warning(f"Could not parse price '{price_str}' for SKU {sku_id}")
 
-            return {
+            result = {
                 "sku_id": sku.get("sku_id"),
                 "sku_name": sku.get("sku_name"),
                 "retailer_price": float(sku.get("retailer_price") or 0.0),
@@ -310,10 +344,13 @@ class CompetitorPriceFeed:
                 "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
                 "last_checked": datetime.datetime.now().isoformat()
             }
+            self._set_memory_cache(sku_id, result)
+            return result
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             log.warning(f"SerpAPI request issue for SKU {sku.get('sku_id')}: {e}")
             cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
             if cached:
+                self._set_memory_cache(sku_id, cached)
                 self._log_event(
                     EventStage.ENRICHING,
                     "WARNING",
@@ -332,6 +369,7 @@ class CompetitorPriceFeed:
             log.warning(f"Unexpected SerpAPI error for SKU {sku.get('sku_id')}: {e}")
             cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
             if cached:
+                self._set_memory_cache(sku_id, cached)
                 self._log_event(
                     EventStage.ENRICHING,
                     "WARNING",
@@ -462,8 +500,9 @@ class CompetitorPriceFeed:
             )
             return []
 
-    async def fetch_live_snapshot(self, limit: int = 500) -> Dict[str, Any]:
+    async def fetch_live_snapshot(self, limit: int = DEFAULT_REFRESH_LIMIT) -> Dict[str, Any]:
         """Fetches live prices for multiple SKUs and returns a snapshot."""
+        limit = max(1, min(int(limit or self.DEFAULT_REFRESH_LIMIT), self.MAX_REFRESH_LIMIT))
         self._log_event(EventStage.FETCHING, "RUNNING", f"Starting live snapshot fetch with limit {limit}", {"requested_limit": limit})
         catalog_skus = await self.fetch_skus_to_track(limit=limit)
         catalog_count = len(catalog_skus)
@@ -743,8 +782,9 @@ class CompetitorPriceFeed:
             log.error(f"Error writing run metadata to BigQuery table {self.FULL_RUNS_TABLE_ID}: {e}")
             self._log_event(EventStage.ERROR, "ERROR", f"Failed to write run metadata: {e}", {"error_type": "BIGQUERY_WRITE_ERROR", "fix": f"Check permissions and table schema for {self.FULL_RUNS_TABLE_ID}."})
 
-    async def run(self, limit: int = 500) -> Dict[str, Any]:
+    async def run(self, limit: int = DEFAULT_REFRESH_LIMIT) -> Dict[str, Any]:
         """Main entry point to run the feed."""
+        limit = max(1, min(int(limit or self.DEFAULT_REFRESH_LIMIT), self.MAX_REFRESH_LIMIT))
         self.run_events = [] # Clear events for a new run
         self.current_run_id = str(uuid.uuid4()) # Generate a new run ID for this execution
         self.run_start_time = datetime.datetime.now().isoformat()

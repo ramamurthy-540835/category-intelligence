@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Category Intelligence Agent")
 FEED_RUN_LOCK = asyncio.Lock()
 ACTIVE_FEED_RUN_ID = None
+LAST_FEED_REFRESH_AT = None
+MIN_FEED_REFRESH_INTERVAL_SECONDS = 600
+MANUAL_REFRESH_DEFAULT_LIMIT = 20
+MANUAL_REFRESH_MAX_LIMIT = 20
 
 # --- Environment Variable Validation and Logging ---
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
@@ -250,19 +254,29 @@ async def agent_action(request: ActionRequest):
 
 
 @app.post("/feeds/prices")
-async def run_competitor_price_feed(limit: int = 500):
+async def run_competitor_price_feed(limit: int = MANUAL_REFRESH_DEFAULT_LIMIT):
     """
     Triggers a run of the competitor price feed to fetch and store prices.
     """
     try:
         check_gcp_auth()
-        global ACTIVE_FEED_RUN_ID
+        global ACTIVE_FEED_RUN_ID, LAST_FEED_REFRESH_AT
+        effective_limit = max(1, min(int(limit or MANUAL_REFRESH_DEFAULT_LIMIT), MANUAL_REFRESH_MAX_LIMIT))
         if FEED_RUN_LOCK.locked():
             return JSONResponse(content={
                 "status": "running",
                 "message": "Feed run already in progress.",
                 "run_id": ACTIVE_FEED_RUN_ID,
-                "requested_limit": limit
+                "requested_limit": effective_limit
+            }, status_code=status.HTTP_200_OK)
+        now = asyncio.get_event_loop().time()
+        if LAST_FEED_REFRESH_AT and (now - LAST_FEED_REFRESH_AT) < MIN_FEED_REFRESH_INTERVAL_SECONDS:
+            return JSONResponse(content={
+                "status": "cooldown",
+                "message": "Refresh cooldown active. Manual refresh is limited to once every 10 minutes.",
+                "run_id": ACTIVE_FEED_RUN_ID,
+                "requested_limit": effective_limit,
+                "cooldown_seconds_remaining": int(MIN_FEED_REFRESH_INTERVAL_SECONDS - (now - LAST_FEED_REFRESH_AT)),
             }, status_code=status.HTTP_200_OK)
 
         # Validate environment config before starting feed
@@ -273,9 +287,10 @@ async def run_competitor_price_feed(limit: int = 500):
         async with FEED_RUN_LOCK:
             feed = CompetitorPriceFeed()
             ACTIVE_FEED_RUN_ID = feed.current_run_id
-            result = await feed.run(limit=limit)
+            result = await feed.run(limit=effective_limit)
+            LAST_FEED_REFRESH_AT = asyncio.get_event_loop().time()
             ACTIVE_FEED_RUN_ID = result.get("run_id")
-        result["requested_limit"] = limit
+        result["requested_limit"] = effective_limit
         return JSONResponse(content=result, status_code=status.HTTP_200_OK)
     except HTTPException as e:
         return JSONResponse(content=e.detail, status_code=e.status_code)
@@ -552,39 +567,14 @@ async def dashboard(
     except Exception as e:
         logger.error(f"Dashboard overview failed: {e}")
         # Fallback to SerpAPI if BigQuery fails (but not if auth is missing)
-        try:
-            feed = CompetitorPriceFeed()
-            snapshot = await feed.fetch_live_snapshot()
-            rows = snapshot.get("rows", [])
-            alerts = []
-            for row in rows:
-                gap = row.get("price_gap_pct")
-                if gap is None or abs(gap) < 3:
-                    continue
-                direction = "above" if gap > 0 else "below"
-                priority = "P1" if abs(gap) >= 8 else "P2"
-                alerts.append({
-                    "priority": priority,
-                    "sku": row.get("name", row.get("sku_id", "Unknown SKU")),
-                    "msg": f"Price {abs(gap):.1f}% {direction} market"
-                })
-            return {
-                "tab": "overview",
-                "source": "live-serpapi",
-                "timestamp": snapshot.get("timestamp"),
-                "alerts": alerts,
-                "rows": rows,
-            }
-        except Exception as fallback_error:
-            logger.error(f"Overview fallback failed: {fallback_error}")
-            return JSONResponse(content={
-                "tab": "overview",
-                "source": "cached-analytics",
-                "alerts": [],
-                "rows": [],
-                "status": "degraded",
-                "error": "Live feed unavailable. Check GCP authentication and SERPAPI connectivity."
-            }, status_code=status.HTTP_200_OK)
+        return JSONResponse(content={
+            "tab": "overview",
+            "source": "cached-analytics",
+            "alerts": [],
+            "rows": [],
+            "status": "degraded",
+            "error": "Overview read failed; live refresh is manual-only."
+        }, status_code=status.HTTP_200_OK)
 
 
 @app.get("/dashboard/sell-through")
