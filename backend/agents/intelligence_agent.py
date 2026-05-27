@@ -28,6 +28,33 @@ def _bq_client():
     return bigquery.Client(project=PROJECT)
 
 
+def build_category_predicate(category: str, column: str = "sku_name") -> str:
+    if category == "Home Appliance":
+        return f"REGEXP_CONTAINS(LOWER({column}), r'(fridge|refrigerator|washer|dryer|oven|microwave|range|appliance)')"
+    if category == "Mobile Accessories":
+        return f"REGEXP_CONTAINS(LOWER({column}), r'(case|charger|cable|power bank|screen protector|mount|adapter|phone)')"
+    return f"REGEXP_CONTAINS(LOWER({column}), r'(tv|oled|soundbar|projector|receiver|bose|sonos)')"
+
+
+def inject_category_predicate(sql: str, category: str, column: str = "sku_name") -> str:
+    predicate = build_category_predicate(category, column)
+    # Insert category predicate before trailing QUALIFY / ORDER BY / LIMIT clauses.
+    # Appending at the very end can corrupt syntax (e.g., after LIMIT).
+    tail_match = re.search(r"\b(QUALIFY|ORDER\s+BY|LIMIT)\b", sql, flags=re.IGNORECASE)
+    if tail_match:
+        head = sql[:tail_match.start()]
+        tail = sql[tail_match.start():]
+    else:
+        head = sql
+        tail = ""
+
+    if re.search(r"\bWHERE\b", head, flags=re.IGNORECASE):
+        head = f"{head} AND {predicate}"
+    else:
+        head = f"{head} WHERE {predicate}"
+    return f"{head} {tail}".strip()
+
+
 def _run_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[dict]:
     """Parameterized BigQuery SELECT helper. Tolerates missing creds — returns []."""
     try:
@@ -51,7 +78,7 @@ def _run_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[dict]:
 
 # ── Real BigQuery-backed tools ───────────────────────────────────────────────
 
-def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
+def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20, category: str = "Entertainment") -> Dict[str, Any]:
     sku_clause = ""
     params: Dict[str, Any] = {"row_limit": int(limit) if limit else 20}
     if sku_id:
@@ -94,7 +121,7 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
         ORDER BY ABS((m.our_price - s.competitor_price) / NULLIF(m.our_price, 0)) DESC
         LIMIT @row_limit
     """
-    rows = _run_query(sql, params)
+    rows = _run_query(inject_category_predicate(sql, category, "m.sku_name"), params)
     return {
         "source": "bigquery-live" if rows else "empty",
         "table": "competitor_price_snapshots",
@@ -103,7 +130,7 @@ def get_competitive_pricing(sku_id: Optional[str] = None, limit: int = 20) -> Di
     }
 
 
-def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
+def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20, category: str = "Entertainment") -> Dict[str, Any]:
     sku_clause = ""
     params: Dict[str, Any] = {"row_limit": int(limit) if limit else 20}
     if sku_id:
@@ -141,7 +168,7 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Di
         ORDER BY price_gap_pct ASC
         LIMIT @row_limit
     """
-    rows = _run_query(sql, params)
+    rows = _run_query(inject_category_predicate(sql, category, "m.sku_name"), params)
     return {
         "source": "bigquery-live" if rows else "empty",
         "table": "competitor_price_snapshots",
@@ -151,7 +178,7 @@ def get_margin_intelligence(sku_id: Optional[str] = None, limit: int = 20) -> Di
     }
 
 
-def get_inventory_analysis(sku_id: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
+def get_inventory_analysis(sku_id: Optional[str] = None, limit: int = 20, category: str = "Entertainment") -> Dict[str, Any]:
     sku_clause = "WHERE COALESCE(active_flag, TRUE) = TRUE"
     params: Dict[str, Any] = {"row_limit": int(limit) if limit else 20}
     if sku_id:
@@ -163,7 +190,7 @@ def get_inventory_analysis(sku_id: Optional[str] = None, limit: int = 20) -> Dic
         {sku_clause}
         LIMIT @row_limit
     """
-    rows = _run_query(sql, params)
+    rows = _run_query(inject_category_predicate(sql, category, "sku_name"), params)
     return {
         "source": "bigquery-live" if rows else "empty",
         "table": "sku_master",

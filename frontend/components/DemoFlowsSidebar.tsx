@@ -18,6 +18,7 @@ type Flow = {
   icon: string;
   label: string;
   alert?: boolean;
+  flowId?: string;
   prompt: string;
   description: string;
 };
@@ -92,6 +93,7 @@ const DEMO_FLOWS: Flow[] = [
 const QUICK_ACTIONS: Flow[] = [
   {
     id: "qa-health",
+    flowId: "health-check",
     icon: "♡",
     label: "90-Day Health Check",
     prompt: "Run a 90-day health check on the Home Theater category.",
@@ -99,6 +101,7 @@ const QUICK_ACTIONS: Flow[] = [
   },
   {
     id: "qa-diagnose",
+    flowId: "diagnose-lg-c3",
     icon: "⚕",
     label: "Diagnose LG C3",
     prompt: "The LG C3 is down 31%. Walk me through root cause and recovery paths.",
@@ -106,6 +109,7 @@ const QUICK_ACTIONS: Flow[] = [
   },
   {
     id: "qa-price",
+    flowId: "price-vs-amazon",
     icon: "🏷️",
     label: "Price vs Amazon",
     prompt: "Compare our Home Theater prices vs Amazon. Show biggest gaps with margin impact.",
@@ -113,6 +117,7 @@ const QUICK_ACTIONS: Flow[] = [
   },
   {
     id: "qa-ad",
+    flowId: "ad-plan-optimizer",
     icon: "📣",
     label: "Ad Plan Optimizer",
     prompt: "Show vendor co-op balances, ROAS by channel, and flag expiry risks.",
@@ -148,7 +153,7 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("cat-flow-event", {
-          detail: { prompt: flow.prompt, flowId: flow.id, label: flow.label, icon: flow.icon },
+          detail: { prompt: flow.prompt, flowId: flow.flowId || flow.id, label: flow.label, icon: flow.icon },
         }),
       );
       window.dispatchEvent(new CustomEvent("cat-flow-prompt", { detail: flow.prompt }));
@@ -159,13 +164,13 @@ export default function DemoFlowsSidebar({ activeFlowId, onFlowSelect, alertFlow
 
   return (
     <aside
-      className="w-52 min-w-[208px] flex flex-col py-4 overflow-y-auto"
+      className="w-64 h-full flex-shrink-0 flex flex-col py-4 overflow-y-auto scrollbar-none"
       style={{
         background: "var(--bby-sidebar-bg, #0d1117)",
         borderRight: "1px solid var(--bby-border-subtle, #1e2532)",
       }}
     >
-      <SectionLabel>Demo Flows</SectionLabel>
+      <SectionLabel>Analytical Workflows</SectionLabel>
 
       <div className="flex flex-col gap-0.5 px-2 mb-2">
         {DEMO_FLOWS.map((flow) => {

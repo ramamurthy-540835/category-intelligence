@@ -164,6 +164,7 @@ export default function AgentControlCenter({
   // Falls back to props if ChatPanel hasn't fired yet (idle state).
   const [chatStatus, setChatStatus] = useState<Status>(propStatus);
   const [chatSteps, setChatSteps] = useState<Props["steps"]>(propSteps);
+  const [processingStartedAt, setProcessingStartedAt] = useState<number | null>(null);
   useEffect(() => {
     const onStatus = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -178,6 +179,14 @@ export default function AgentControlCenter({
   // Local aliases used below for the loop / network rendering.
   const status = chatStatus;
   const steps = chatSteps;
+  useEffect(() => {
+    if (status !== "idle" && status !== "done" && status !== "error") {
+      setProcessingStartedAt((prev) => prev ?? Date.now());
+      return;
+    }
+    setProcessingStartedAt(null);
+  }, [status]);
+  const isLongRunning = processingStartedAt !== null && Date.now() - processingStartedAt > 10000;
 
   // Listen for sidebar flow events + chat-input events for memory
   useEffect(() => {
@@ -219,16 +228,18 @@ export default function AgentControlCenter({
     ? { dot: "#ef4444", text: "Error",   color: "#ef4444", pulse: false }
     : isDone
     ? { dot: "#22c55e", text: "Done",    color: "#22c55e", pulse: false }
+    : isLongRunning
+    ? { dot: "#f59e0b", text: "Degraded Sync", color: "#f59e0b", pulse: true }
     : isRunning
     ? { dot: "#f59e0b", text: "Running", color: "#f59e0b", pulse: true }
-    : { dot: "#475569", text: "Idle",    color: "#94a3b8", pulse: false };
+    : { dot: "#0ea5e9", text: "Syncing", color: "#7dd3fc", pulse: true };
 
   const alertCount = HARDCODED_ALERTS.length;
   const flowMeta = activeFlow ? FLOW_META[activeFlow.flowId] : null;
 
   return (
     <aside
-      className="w-80 min-w-[320px] flex flex-col h-full overflow-hidden"
+      className="w-80 h-full flex-shrink-0 flex flex-col"
       style={{ background: "var(--bby-acc-bg)", borderLeft: "1px solid var(--bby-acc-border)" }}
     >
       {/* 1. Header */}
@@ -263,7 +274,7 @@ export default function AgentControlCenter({
         })}
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-4 text-[12px] text-slate-200">
+      <div className="flex-1 pb-4 text-[12px] text-slate-200">
         {tab === "activity" ? (
           <>
             {/* 3. Active Flow */}
@@ -276,7 +287,7 @@ export default function AgentControlCenter({
                     {activeFlow.icon}
                   </span>
                   <div className="min-w-0">
-                    <div className="text-white text-sm font-semibold leading-tight truncate">{activeFlow.label}</div>
+                    <div className="text-xs md:text-sm font-medium text-slate-200 leading-normal max-w-full text-center p-2 block break-words">{activeFlow.label}</div>
                     <div className="text-[11px] mt-0.5" style={{ color: "#64748b" }}>{flowMeta?.desc || "Flow context"}</div>
                     <div className="text-[10px] mt-1.5" style={{ color: "#475569" }}>Monitoring</div>
                     <div className="text-[10px]" style={{ color: "#64748b" }}>{flowMeta?.stats || "—"}</div>
@@ -288,10 +299,15 @@ export default function AgentControlCenter({
             </div>
 
             {error && (
-              <div className="mx-4 mt-3 mb-1 rounded-md px-2 py-1.5 text-[11px]"
-                style={{ background: "#7f1d1d", border: "1px solid #b91c1c", color: "#fecaca" }}>
-                {error}
-              </div>
+              <details className="mx-4 mt-3 mb-1 rounded-md border border-red-900/60 bg-red-950/30 text-[11px] text-red-100">
+                <summary className="cursor-pointer list-none px-2 py-1.5 flex items-center justify-between">
+                  <span className="truncate">Sync temporarily degraded</span>
+                  <span className="text-red-300 text-[10px]">Details</span>
+                </summary>
+                <div className="px-2 pb-2 text-red-200 break-words">
+                  {String(error).slice(0, 500)}
+                </div>
+              </details>
             )}
 
             {/* 4. Agent Strategy Loop */}
@@ -459,4 +475,3 @@ export default function AgentControlCenter({
     </aside>
   );
 }
-

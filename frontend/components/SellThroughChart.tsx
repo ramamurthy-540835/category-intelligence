@@ -96,6 +96,11 @@ export default function SellThroughChart({ flowKey, onWeekClick, weekWindow = 13
     return n >= from && n <= to;
   });
   const currentWeek = data.length > 0 ? data[data.length - 1].week : "--";
+  const flowTitleSuffix = flowKey === "diagnose-lg-c3"
+    ? " (LG C3 Focus)"
+    : flowKey === "price-vs-amazon"
+    ? " (Price Gap Watch)"
+    : "";
   React.useEffect(() => {
     const params = new URLSearchParams({
       start_date: "2026-04-30",
@@ -123,6 +128,7 @@ export default function SellThroughChart({ flowKey, onWeekClick, weekWindow = 13
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
         <span style={{ color: "#fff", fontSize: 12, fontWeight: 600, letterSpacing: "0.04em" }}>
           {safeWindow}-WEEK SELL-THROUGH TREND - UNITS BY BRAND
+          {flowTitleSuffix}
           <span style={{ color: "#94a3b8", fontWeight: 500 }}> (Samsung / Sony / LG)</span>
         </span>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>

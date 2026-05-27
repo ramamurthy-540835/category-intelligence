@@ -118,6 +118,57 @@ class CompetitorPriceFeed:
         else:
             log.warning("BigQuery client not available or not initialized, skipping event logging to BigQuery.")
 
+    async def _get_cached_snapshot_for_sku(self, sku_id: str, sku_name: str) -> Optional[Dict[str, Any]]:
+        """Return latest cached competitor snapshot for a SKU, if available."""
+        try:
+            if not (self.bq_client and self.bq_client._client):
+                return None
+            if sku_id:
+                where_sql = "WHERE sku_id = @sku_id"
+                params = {"sku_id": sku_id}
+            elif sku_name:
+                where_sql = "WHERE LOWER(sku_name) = LOWER(@sku_name)"
+                params = {"sku_name": sku_name}
+            else:
+                return None
+
+            sql = f"""
+                SELECT
+                  sku_id,
+                  sku_name,
+                  retailer_price,
+                  competitor_price,
+                  price_gap_pct,
+                  product_url,
+                  image_url,
+                  in_stock,
+                  snapshot_time
+                FROM `{self.FULL_TABLE_ID}`
+                {where_sql}
+                ORDER BY snapshot_time DESC, competitor_price ASC
+                LIMIT 1
+            """
+            rows = await self.bq_client.query(sql, params)
+            if not rows:
+                return None
+            r = rows[0]
+            return {
+                "sku_id": r.get("sku_id") or sku_id,
+                "sku_name": r.get("sku_name") or sku_name,
+                "retailer_price": float(r.get("retailer_price") or 0.0),
+                "competitor_price": float(r.get("competitor_price") or 0.0),
+                "price_gap_pct": float(r.get("price_gap_pct") or 0.0),
+                "competitor_name": r.get("competitor_name") or self.COMPETITOR_NAME,
+                "search_query_used": "cached_snapshot",
+                "product_url": r.get("product_url"),
+                "image_url": r.get("image_url"),
+                "in_stock": bool(r.get("in_stock", True)),
+                "last_checked": datetime.datetime.now().isoformat(),
+            }
+        except Exception as e:
+            log.warning(f"Cached snapshot lookup failed for sku_id={sku_id} sku_name={sku_name}: {e}")
+            return None
+
     async def fetch_skus_to_track(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Fetches SKUs from BigQuery that are marked for tracking."""
         self._log_event(EventStage.FETCHING, "RUNNING", f"Loading active SKUs from {self.sku_master_table_id} with limit {limit}", {"requested_limit": limit})
@@ -193,9 +244,21 @@ class CompetitorPriceFeed:
                     "gl": "us",
                     "device": "desktop",
                 }
-                async with session.get(self.SERPAPI_URL, params=params) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+                try:
+                    async with session.get(self.SERPAPI_URL, params=params, timeout=aiohttp.ClientTimeout(total=8)) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                    cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
+                    if cached:
+                        self._log_event(
+                            EventStage.ENRICHING,
+                            "WARNING",
+                            "SerpAPI unavailable, using cached competitor snapshot",
+                            {"sku_id": sku_id, "error_type": "SERPAPI_DEGRADED"},
+                        )
+                        return cached
+                    raise e
 
                 if "error" in data:
                     # SerpAPI returning {"error": ...} for one SKU usually means "no
@@ -247,16 +310,41 @@ class CompetitorPriceFeed:
                 "in_stock": True, # Assume in stock if listed, SerpApi doesn't reliably provide this
                 "last_checked": datetime.datetime.now().isoformat()
             }
-        except aiohttp.ClientError as e:
-            log.error(f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}")
-            err_msg = str(e)
-            error_type = "SERPAPI_CONNECTIVITY_ERROR" if ("Name or service not known" in err_msg or "Temporary failure in name resolution" in err_msg or "Cannot connect" in err_msg) else "HTTP_ERROR"
-            fix = "Check DNS/network egress to serpapi.com from backend host." if error_type == "SERPAPI_CONNECTIVITY_ERROR" else "Check network connectivity and SERP API endpoint."
-            self._log_event(EventStage.ENRICHING, "ERROR", f"HTTP error fetching price for SKU {sku.get('sku_id')}: {e}", {"error_type": error_type, "fix": fix})
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            log.warning(f"SerpAPI request issue for SKU {sku.get('sku_id')}: {e}")
+            cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
+            if cached:
+                self._log_event(
+                    EventStage.ENRICHING,
+                    "WARNING",
+                    "SerpAPI unavailable, using cached competitor snapshot",
+                    {"sku_id": sku_id, "error_type": "SERPAPI_DEGRADED"},
+                )
+                return cached
+            self._log_event(
+                EventStage.ENRICHING,
+                "WARNING",
+                "SerpAPI unavailable, using cached competitor snapshot",
+                {"sku_id": sku_id, "error_type": "SERPAPI_DEGRADED_NO_CACHE"},
+            )
             return None
         except Exception as e:
-            log.error(f"Unexpected error fetching price for SKU {sku.get('sku_id')}: {e}")
-            self._log_event(EventStage.ENRICHING, "ERROR", f"Unexpected error fetching price for SKU {sku.get('sku_id')}: {e}", {"error_type": "UNEXPECTED_ERROR"})
+            log.warning(f"Unexpected SerpAPI error for SKU {sku.get('sku_id')}: {e}")
+            cached = await self._get_cached_snapshot_for_sku(sku_id, sku_name)
+            if cached:
+                self._log_event(
+                    EventStage.ENRICHING,
+                    "WARNING",
+                    "SerpAPI unavailable, using cached competitor snapshot",
+                    {"sku_id": sku_id, "error_type": "SERPAPI_DEGRADED"},
+                )
+                return cached
+            self._log_event(
+                EventStage.ENRICHING,
+                "WARNING",
+                "SerpAPI unavailable, using cached competitor snapshot",
+                {"sku_id": sku_id, "error_type": "SERPAPI_DEGRADED_NO_CACHE"},
+            )
             return None
 
     async def fetch_top_products(
@@ -342,8 +430,8 @@ class CompetitorPriceFeed:
                     "last_checked": now_iso,
                 })
             return rows
-        except aiohttp.ClientError as e:
-            log.error(f"HTTP error during discovery for '{query}': {e}")
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            log.warning(f"Discovery request issue for '{query}': {e}")
             err_msg = str(e)
             error_type = (
                 "SERPAPI_CONNECTIVITY_ERROR"
@@ -359,17 +447,17 @@ class CompetitorPriceFeed:
             )
             self._log_event(
                 EventStage.ENRICHING,
-                "ERROR",
-                f"Discovery HTTP error for '{query}': {e}",
+                "WARNING",
+                "SerpAPI unavailable, using cached competitor snapshot",
                 {"error_type": error_type, "fix": fix},
             )
             return []
         except Exception as e:
-            log.error(f"Unexpected discovery error for '{query}': {e}")
+            log.warning(f"Unexpected discovery error for '{query}': {e}")
             self._log_event(
                 EventStage.ENRICHING,
-                "ERROR",
-                f"Unexpected discovery error for '{query}': {e}",
+                "WARNING",
+                "SerpAPI unavailable, using cached competitor snapshot",
                 {"error_type": "UNEXPECTED_ERROR"},
             )
             return []

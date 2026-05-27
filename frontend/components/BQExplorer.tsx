@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // BQExplorer — live BigQuery viewer / editor for the Category Intelligence
@@ -97,6 +97,7 @@ const fmt = (col: string, val: BQRow[string]): string => {
 };
 
 export default function BQExplorer() {
+  const [activeCategory, setActiveCategory] = useState<string>("Home Appliance");
   const [sql, setSql] = useState<string>(PRESET_QUERIES[0].sql);
   const [result, setResult] = useState<BQResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -111,7 +112,7 @@ export default function BQExplorer() {
     setError(null);
     const t0 = performance.now();
     try {
-      const res = await fetch("/api/bq/query", {
+      const res = await fetch(`/api/bq/query?category=${encodeURIComponent(activeCategory)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sql, max_rows: 200 }),
@@ -126,6 +127,15 @@ export default function BQExplorer() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const onCategory = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail.category === "string") setActiveCategory(detail.category);
+    };
+    window.addEventListener("cat-category-change", onCategory);
+    return () => window.removeEventListener("cat-category-change", onCategory);
+  }, []);
 
   const isEditableCol = (col: string) =>
     editMode && (col === "our_price" || col === "sku_name");
@@ -338,4 +348,3 @@ export default function BQExplorer() {
     </div>
   );
 }
-

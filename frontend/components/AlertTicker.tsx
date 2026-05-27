@@ -16,18 +16,13 @@ export default function AlertTicker({ alerts }: Props) {
   if (alerts.length === 0) {
     return null;
   }
+  const uniqueAlerts = Array.from(new Map(alerts.map((a) => [`${a.priority}|${a.sku}|${a.msg}`, a])).values());
 
   return (
     <div className="bg-red-700 text-white text-[11px] py-1 px-4 overflow-hidden relative h-7 flex items-center">
       <div className="ticker-track flex items-center whitespace-nowrap animate-ticker hover:animation-pause" style={{ animationDuration: `120s` }}>
-        {alerts.map((alert, index) => (
+        {uniqueAlerts.map((alert, index) => (
           <span key={index} className="inline-flex items-center mx-4">
-            <span className="font-semibold">{alert.sku}</span> <span className="text-red-200">— {alert.msg}</span>
-            <span className="mx-3 text-red-300">•</span>
-          </span>
-        ))}
-        {alerts.map((alert, index) => (
-          <span key={index + alerts.length} className="inline-flex items-center mx-4">
             <span className="font-semibold">{alert.sku}</span> <span className="text-red-200">— {alert.msg}</span>
             <span className="mx-3 text-red-300">•</span>
           </span>
@@ -52,4 +47,3 @@ export default function AlertTicker({ alerts }: Props) {
     </div>
   );
 }
-

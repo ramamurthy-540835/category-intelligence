@@ -22,10 +22,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen bg-[#0d1117] text-slate-200">
+      <body className="h-screen overflow-hidden bg-[#0d1117] text-slate-200">
         <RootErrorBoundary>{children}</RootErrorBoundary>
       </body>
     </html>
   );
 }
-
