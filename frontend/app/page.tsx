@@ -225,7 +225,8 @@ export default function Home() {
       return;
     }
 
-    if (data.error) {
+    // Only return early on critical errors; allow degraded status to use fallback
+    if (data.error && data.error_type && !data.error_type.includes("degraded")) {
       setSource("Error");
       setAlerts([{ priority: "P1", sku: "System", msg: `Error loading data: ${data.error}` }]);
       setRows([]);
