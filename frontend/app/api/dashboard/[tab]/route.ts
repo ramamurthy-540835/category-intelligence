@@ -6,9 +6,9 @@ const ALLOWED_TABS = new Set(['overview', 'inventory', 'dc-stock', 'promos', 'co
 
 function getBackendUrl() {
   return (
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.BACKEND_URL ||
-    process.env.NEXT_PUBLIC_API_BASE_URL ||
-    'http://10.100.15.44:8005'
+    process.env.NEXT_PUBLIC_API_BASE_URL
   );
 }
 
@@ -20,33 +20,27 @@ export async function GET(req: NextRequest, { params }: { params: { tab: string 
   }
 
   try {
-    const backendUrl = getBackendUrl();
-    const qs = req.nextUrl.searchParams.toString();
-    const response = await fetch(`${backendUrl}/dashboard/${tab}${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
+    const params = new URLSearchParams(req.nextUrl.searchParams);
+    const url = `${getBackendUrl()}/dashboard/${tab}?${params.toString()}`;
+
+    const response = await fetch(url, { cache: 'no-store' });
+
     if (!response.ok) {
-      const detail = await response.text();
-      return NextResponse.json({
-        tab,
-        source: 'fallback',
-        alerts: [],
-        rows: [],
-        data: [],
-        error: `Backend unavailable (${response.status})`,
-        detail,
-        backend_url: backendUrl,
-      }, { status: 200 });
+      return NextResponse.json(
+        { error: 'Backend error', status: response.status },
+        { status: response.status }
+      );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
-  } catch (error) {
-    return NextResponse.json({
-      tab,
-      source: 'fallback',
-      alerts: [],
-      data: [],
-      error: String(error),
-      backend_url: getBackendUrl(),
-    }, { status: 200 });
+    const text = await response.text();
+    return new NextResponse(text, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: error.message },
+      { status: 500 }
+    );
   }
 }

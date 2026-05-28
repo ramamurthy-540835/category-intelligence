@@ -15,7 +15,7 @@ from core.auth.rbac import require_permission
 from data.external_feeds import CompetitorPriceFeed, EventStage # Import EventStage
 from data.bigquery_client import BigQueryClient, bq_client_instance # Import the global instance
 from data.seeder import BigQuerySeeder # Import seeder
-from agents.intelligence_agent import inject_category_predicate
+from agents.intelligence_agent import inject_category_predicate, build_category_predicate
 
 # --- Environment Loading ---
 # Single source of truth is the repo-root .env.local. backend/.env.local is
@@ -452,16 +452,21 @@ async def get_latest_competitor_prices(category: str = "Entertainment"):
 
         feed = CompetitorPriceFeed() # This might also raise auth errors if SERPAPI_KEY is missing
 
-        # SQL to get the latest timestamp and then all rows for that timestamp
+        # Build category predicate to apply to both the outer query and the MAX(snapshot_time) subquery
+        category_predicate = build_category_predicate(category, "sku_name")
+
+        # SQL to get the latest timestamp within the category, then all rows for that timestamp
         sql = f"""
             SELECT *
             FROM `{feed.FULL_TABLE_ID}`
-            WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `{feed.FULL_TABLE_ID}`)
+            WHERE {category_predicate}
+            AND snapshot_time = (
+                SELECT MAX(snapshot_time)
+                FROM `{feed.FULL_TABLE_ID}`
+                WHERE {category_predicate}
+            )
             ORDER BY sku_id
         """
-
-        # Apply category predicate
-        sql = inject_category_predicate(sql, category, "sku_name")
 
         latest_prices = await bq_client_instance.query(sql, {})
 
