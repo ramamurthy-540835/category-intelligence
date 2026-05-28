@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import AgentResponse from "@/components/AgentResponse";
+import AgentFlyout from "@/components/AgentFlyout";
 import { useAgentStream } from "@/lib/sse/useSSE";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -32,6 +33,8 @@ const SESSION_ID =
 export default function ChatPanel() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isFlyoutOpen, setIsFlyoutOpen] = useState(false);
+  const [flyoutPrompt, setFlyoutPrompt] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -112,39 +115,46 @@ export default function ChatPanel() {
   const liveAgentText = isStreaming ? finalResponse : "";
   const showEmptyState = messages.length === 0 && !isStreaming && !error;
 
+  const mapStatusToFlyout = (): "thinking" | "executing" | "done" | "error" => {
+    if (error) return "error";
+    if (isStreaming) return status === "thinking" ? "thinking" : "executing";
+    return "done";
+  };
+
   return (
-    <section
-      className="flex flex-col h-full overflow-hidden rounded-lg"
-      style={{ background: "var(--bby-chat-bg)", border: "1px solid var(--bby-chat-border)" }}
-    >
-      {/* Header */}
-      <div
-        className="flex items-center gap-3 px-4 h-14 flex-shrink-0"
-        style={{ background: "var(--bby-chat-bg)", borderBottom: "1px solid var(--bby-chat-border)" }}
+    <>
+      <section
+        className="flex flex-col h-full overflow-hidden rounded-lg"
+        style={{ background: "var(--bby-chat-bg)", border: "1px solid var(--bby-chat-border)" }}
       >
-        <span
-          className="inline-flex items-center justify-center w-9 h-9 rounded-full text-base"
-          style={{ background: "#1e3a5f", color: "var(--bby-step-active-icon)" }}
-        >
-          ⚡
-        </span>
-        <div className="flex-1 leading-tight">
-          <div className="text-white font-semibold text-sm">Agentic Category AI</div>
-          <div className="text-[11px]" style={{ color: "var(--bby-kpi-label)" }}>
-            Multi-step reasoning · Real-time data · Autonomous monitoring
-          </div>
-        </div>
-        <span
-          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium"
-          style={{ background: statusPill.bg, color: statusPill.text }}
+        {/* Header */}
+        <div
+          className="flex items-center gap-3 px-4 h-14 flex-shrink-0"
+          style={{ background: "var(--bby-chat-bg)", borderBottom: "1px solid var(--bby-chat-border)" }}
         >
           <span
-            className={"inline-block w-1.5 h-1.5 rounded-full " + (statusPill.pulse ? "animate-pulse_dot" : "")}
-            style={{ background: statusPill.dot }}
-          />
-          {statusPill.label}
-        </span>
-      </div>
+            className="inline-flex items-center justify-center w-9 h-9 rounded-full text-base"
+            style={{ background: "#1e3a5f", color: "var(--bby-step-active-icon)" }}
+          >
+            ⚡
+          </span>
+          <div className="flex-1 leading-tight">
+            <div className="text-white font-semibold text-sm">Agentic Category AI</div>
+            <div className="text-[11px]" style={{ color: "var(--bby-kpi-label)" }}>
+              Multi-step reasoning · Real-time data · Autonomous monitoring
+            </div>
+          </div>
+          <span
+            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium"
+            style={{ background: statusPill.bg, color: statusPill.text }}
+          >
+            <span
+              className={"inline-block w-1.5 h-1.5 rounded-full " + (statusPill.pulse ? "animate-pulse_dot" : "")}
+              style={{ background: statusPill.dot }}
+            />
+            {statusPill.label}
+          </span>
+        </div>
 
       {/* Message area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 min-h-0">
@@ -185,23 +195,46 @@ export default function ChatPanel() {
               {m.content}
             </div>
           ) : (
-            <div key={`a-${i}`} className="self-start w-full">
-              <AgentResponse content={m.content} />
+            <div
+              key={`a-${i}`}
+              className="self-start w-full cursor-pointer group"
+              onClick={() => {
+                setFlyoutPrompt(messages.find((msg) => msg.role === "user" && msg.timestamp < m.timestamp)?.content || "");
+                setIsFlyoutOpen(true);
+              }}
+            >
+              <div className="relative">
+                <AgentResponse content={m.content} />
+                <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 text-xs text-slate-400 bg-slate-900/80 rounded">
+                  Click to expand ↗
+                </div>
+              </div>
             </div>
           ),
         )}
 
         {/* Streaming response — shown live until status flips to done */}
         {isStreaming && (
-          <div className="self-start w-full">
-            {liveAgentText ? (
-              <AgentResponse content={liveAgentText} />
-            ) : (
-              <div className="text-[12px] italic" style={{ color: "var(--bby-kpi-label)" }}>
-                {steps.length > 0 ? `[${steps[steps.length - 1].step}] ${steps[steps.length - 1].content}` : "Thinking…"}
+          <div
+            className="self-start w-full cursor-pointer group"
+            onClick={() => {
+              setFlyoutPrompt(messages.find((msg) => msg.role === "user" && msg.timestamp < Date.now())?.content || "");
+              setIsFlyoutOpen(true);
+            }}
+          >
+            <div className="relative">
+              {liveAgentText ? (
+                <AgentResponse content={liveAgentText} />
+              ) : (
+                <div className="text-[12px] italic" style={{ color: "var(--bby-kpi-label)" }}>
+                  {steps.length > 0 ? `[${steps[steps.length - 1].step}] ${steps[steps.length - 1].content}` : "Thinking…"}
+                </div>
+              )}
+              <span className="inline-block w-2 h-4 bg-[#3b82f6] align-middle ml-0.5 animate-pulse_dot" aria-hidden="true" />
+              <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 text-xs text-slate-400 bg-slate-900/80 rounded">
+                Click to expand ↗
               </div>
-            )}
-            <span className="inline-block w-2 h-4 bg-[#3b82f6] align-middle ml-0.5 animate-pulse_dot" aria-hidden="true" />
+            </div>
           </div>
         )}
 
@@ -248,6 +281,16 @@ export default function ChatPanel() {
           ➤
         </button>
       </div>
+
+      {/* Agent Flyout Drawer */}
+      <AgentFlyout
+        isOpen={isFlyoutOpen}
+        onClose={() => setIsFlyoutOpen(false)}
+        agentContent={messages.find((m) => m.role === "agent" && m.timestamp > (messages.find((msg) => msg.content === flyoutPrompt)?.timestamp || 0))?.content || finalResponse || ""}
+        status={mapStatusToFlyout()}
+        prompt={flyoutPrompt}
+      />
     </section>
+    </>
   );
 }
