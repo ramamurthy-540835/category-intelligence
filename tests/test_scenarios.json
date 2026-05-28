@@ -1,0 +1,196 @@
+{
+  "test_suite": {
+    "name": "Category Intelligence - Deployment Compliance Test Suite",
+    "version": "1.0",
+    "description": "Comprehensive test suite validating backend API, frontend proxy, and database connectivity"
+  },
+  "test_scenarios": {
+    "backend_tests": [
+      {
+        "id": "BE-001",
+        "name": "Home Theater Category - Pricing Endpoint",
+        "endpoint": "/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Home Theater"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "expected_min_rows": 44,
+        "validation": {
+          "required_fields": ["sku_id", "sku_name", "competitor_price", "retailer_price", "snapshot_time"],
+          "max_response_time_ms": 3000,
+          "no_null_fields": true
+        },
+        "description": "Validates that the backend returns Home Theater category data with correct schema"
+      },
+      {
+        "id": "BE-002",
+        "name": "Home Appliance Category - Pricing Endpoint",
+        "endpoint": "/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Home Appliance"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "validation": {
+          "required_fields": ["sku_id", "sku_name", "competitor_price", "retailer_price", "snapshot_time"],
+          "max_response_time_ms": 3000
+        },
+        "description": "Validates that the backend handles Home Appliance category correctly"
+      },
+      {
+        "id": "BE-003",
+        "name": "Mobile Accessories Category - Pricing Endpoint",
+        "endpoint": "/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Mobile Accessories"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "validation": {
+          "required_fields": ["sku_id", "sku_name", "competitor_price", "retailer_price", "snapshot_time"],
+          "max_response_time_ms": 3000
+        },
+        "description": "Validates that the backend handles Mobile Accessories category correctly"
+      },
+      {
+        "id": "BE-004",
+        "name": "BigQuery Schema Validation",
+        "endpoint": "BigQuery",
+        "validation": {
+          "table": "ctoteam.category_intelligence.competitor_price_snapshots",
+          "required_columns": ["sku_id", "sku_name", "competitor_price", "retailer_price", "snapshot_time"],
+          "min_total_skus": 400,
+          "timestamp_validity": "ISO-8601 format"
+        },
+        "description": "Validates that BigQuery database has correct schema and data"
+      }
+    ],
+    "frontend_tests": [
+      {
+        "id": "FE-001",
+        "name": "Frontend Proxy - Home Theater Category",
+        "endpoint": "/api/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Home Theater"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "expected_content_type": "application/json",
+        "validation": {
+          "is_flat_array": true,
+          "required_fields": ["sku_id", "sku_name", "competitor_price", "retailer_price", "snapshot_time"],
+          "max_response_time_ms": 3000,
+          "no_envelope_object": true
+        },
+        "description": "Validates that the frontend proxy correctly forwards pricing data as a flat array"
+      },
+      {
+        "id": "FE-002",
+        "name": "Frontend Proxy - Home Appliance Category",
+        "endpoint": "/api/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Home Appliance"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "validation": {
+          "is_flat_array": true,
+          "max_response_time_ms": 3000
+        },
+        "description": "Validates that the proxy handles multiple categories correctly"
+      },
+      {
+        "id": "FE-003",
+        "name": "Frontend Proxy - Performance Test",
+        "endpoint": "/api/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "Home Theater"
+        },
+        "validation": {
+          "max_response_time_ms": 3000,
+          "performance_target_ms": 1000
+        },
+        "description": "Ensures proxy response time is acceptable (<3s, target <1s)"
+      },
+      {
+        "id": "FE-004",
+        "name": "Frontend Proxy - Error Handling",
+        "endpoint": "/api/feeds/prices/latest",
+        "method": "GET",
+        "parameters": {
+          "category": "InvalidCategory"
+        },
+        "expected_status": 200,
+        "expected_response_type": "array",
+        "validation": {
+          "graceful_degradation": true,
+          "returns_empty_array_not_error": true
+        },
+        "description": "Validates that invalid categories are handled gracefully"
+      }
+    ],
+    "integration_tests": [
+      {
+        "id": "INT-001",
+        "name": "End-to-End Data Flow",
+        "steps": [
+          "Backend queries BigQuery for Home Theater products",
+          "Backend applies category predicate filter",
+          "Frontend proxy forwards request to backend",
+          "Frontend receives data as flat array",
+          "Frontend displays data in UI"
+        ],
+        "validation": {
+          "data_consistency": "Backend and Frontend return same data",
+          "no_data_loss": true,
+          "schema_preserved": true
+        },
+        "description": "Validates complete data pipeline from database to UI"
+      },
+      {
+        "id": "INT-002",
+        "name": "Category Isolation",
+        "description": "Validates that each category returns its own category-specific data",
+        "validation": {
+          "home_theater_contains_tv_keywords": true,
+          "home_appliance_contains_appliance_keywords": true,
+          "mobile_accessories_contains_accessory_keywords": true,
+          "no_cross_category_data": true
+        }
+      }
+    ]
+  },
+  "compliance_criteria": {
+    "minimum_passing_tests": "100% of critical tests",
+    "critical_tests": [
+      "BE-001: Home Theater data retrieval",
+      "FE-001: Frontend proxy functionality",
+      "INT-001: End-to-end data flow"
+    ],
+    "deployment_ready": {
+      "all_critical_tests_pass": true,
+      "no_critical_failures": true,
+      "database_responsive": true,
+      "proxy_functional": true,
+      "response_times_acceptable": true
+    }
+  },
+  "test_execution": {
+    "how_to_run": [
+      "chmod +x tests/run_suite.sh",
+      "./tests/run_suite.sh"
+    ],
+    "expected_output": {
+      "stdout": "Formatted test summary with pass/fail counts",
+      "json_report": "tests/results/final_compliance_report.json"
+    },
+    "success_criteria": "Final compliance status = COMPLIANT"
+  }
+}
