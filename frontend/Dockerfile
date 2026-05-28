@@ -3,8 +3,16 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+# Clean local VM environment files to prevent runtime environment pollution
+RUN rm -f .env .env.local .env.production .env.development
+
+# Critical Next.js build-time arguments - must be declared before npm run build
 ARG NEXT_PUBLIC_BACKEND_URL
 ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_BACKEND_URL
+
 RUN npm run build
 
 FROM node:20-alpine AS runner

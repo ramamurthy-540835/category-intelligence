@@ -1,20 +1,23 @@
 steps:
+  # 1. Build the Backend container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: [build, -t, gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA, ./backend]
+    args: [build, -t, gcr.io/$PROJECT_ID/category-intelligence-backend:latest, ./backend]
     id: build-backend
 
+  # 2. Push Backend to GCR Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: [push, gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA]
+    args: [push, gcr.io/$PROJECT_ID/category-intelligence-backend:latest]
     id: push-backend
     waitFor: [build-backend]
 
+  # 3. Deploy Backend to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - run
       - deploy
       - category-intelligence-backend
-      - --image=gcr.io/$PROJECT_ID/category-intelligence-backend:$SHORT_SHA
+      - --image=gcr.io/$PROJECT_ID/category-intelligence-backend:latest
       - --region=us-central1
       - --platform=managed
       - --allow-unauthenticated
@@ -27,43 +30,41 @@ steps:
     id: deploy-backend
     waitFor: [push-backend]
 
+  # 4. Grab the dynamically deployed Backend URL and write it to disk
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: bash
     args:
       - -c
-      - |
-        gcloud run services describe category-intelligence-backend \
-          --region=us-central1 --format=value(status.url) > /workspace/backend_url.txt
-        cat /workspace/backend_url.txt
+      - gcloud run services describe category-intelligence-backend --region=us-central1 --format='value(status.url)' > /workspace/backend_url.txt && cat /workspace/backend_url.txt
     id: get-backend-url
     waitFor: [deploy-backend]
 
+  # 5. Build Frontend container with Backend URL injected as a Build Argument (escaped with $$)
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: bash
     args:
       - -c
       - |
-        BACKEND_URL=$(cat /workspace/backend_url.txt)
-        docker build \
-          --build-arg NEXT_PUBLIC_BACKEND_URL=$$BACKEND_URL \
-          -t gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA \
-          ./frontend
+        BACKEND_URL=$$(cat /workspace/backend_url.txt)
+        docker build --build-arg NEXT_PUBLIC_BACKEND_URL="$$BACKEND_URL" -t gcr.io/$PROJECT_ID/category-intelligence-frontend:latest ./frontend
     id: build-frontend
     waitFor: [get-backend-url]
 
+  # 6. Push Frontend to GCR Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: [push, gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA]
+    args: [push, gcr.io/$PROJECT_ID/category-intelligence-frontend:latest]
     id: push-frontend
     waitFor: [build-frontend]
 
+  # 7. Deploy Frontend to Cloud Run (escaped with $$)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: bash
     args:
       - -c
       - |
-        BACKEND_URL=$(cat /workspace/backend_url.txt)
+        BACKEND_URL=$$(cat /workspace/backend_url.txt)
         gcloud run deploy category-intelligence-frontend \
-          --image=gcr.io/$PROJECT_ID/category-intelligence-frontend:$SHORT_SHA \
+          --image=gcr.io/$PROJECT_ID/category-intelligence-frontend:latest \
           --region=us-central1 \
           --platform=managed \
           --allow-unauthenticated \

@@ -1,7 +1,9 @@
 import os
 import logging
 import asyncio
+import datetime
 from pathlib import Path
+from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.responses import StreamingResponse, JSONResponse
 from dotenv import load_dotenv
@@ -12,6 +14,7 @@ from schemas.api import ChatRequest, ActionRequest
 from core.auth.rbac import require_permission
 from data.external_feeds import CompetitorPriceFeed, EventStage # Import EventStage
 from data.bigquery_client import BigQueryClient, bq_client_instance # Import the global instance
+from data.seeder import BigQuerySeeder # Import seeder
 from agents.intelligence_agent import inject_category_predicate
 
 # --- Environment Loading ---
@@ -98,6 +101,21 @@ VERTEX_AI_CONFIG_ERROR_RESPONSE = {
     "message": "Vertex AI model or location configuration missing.",
     "fix": "Set VERTEX_MODEL and VERTEX_AI_LOCATION in .env.local."
 }
+
+# --- Startup Lifecycle Events ---
+@app.on_event("startup")
+async def startup_event():
+    """Run database seeding on application startup if tables are empty."""
+    try:
+        if EFFECTIVE_PROJECT_ID and BIGQUERY_DATASET:
+            logger.info("Starting database seeding check...")
+            seeder = BigQuerySeeder(EFFECTIVE_PROJECT_ID, BIGQUERY_DATASET)
+            result = await seeder.seed_database()
+            logger.info(f"Seeding result: {result}")
+        else:
+            logger.warning("Cannot run seeder: GCP_PROJECT_ID or BIGQUERY_DATASET not set")
+    except Exception as e:
+        logger.error(f"Startup seeding failed (non-blocking): {e}")
 
 def get_structured_error(error_type: str, message: str, fix: str):
     return {
@@ -188,7 +206,7 @@ def validate_environment():
 async def health():
     try:
         check_gcp_auth() # Check auth for health endpoint too
-        
+
         # Perform full environment validation
         config_status = validate_environment()
         if config_status["status"] == "error":
@@ -203,6 +221,34 @@ async def health():
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return JSONResponse(content=get_structured_error("UNKNOWN_ERROR", f"An unexpected error occurred: {e}", "Check logs"), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@app.post("/db/seed")
+async def trigger_database_seed():
+    """Manually trigger BigQuery database seeding."""
+    try:
+        check_gcp_auth()
+        if not EFFECTIVE_PROJECT_ID or not BIGQUERY_DATASET:
+            return JSONResponse(
+                content=get_structured_error("CONFIG_ERROR", "Missing GCP_PROJECT_ID or BIGQUERY_DATASET", "Set both in .env.local"),
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        seeder = BigQuerySeeder(EFFECTIVE_PROJECT_ID, BIGQUERY_DATASET)
+        result = await seeder.seed_database()
+
+        if result["status"] == "success":
+            return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+        else:
+            return JSONResponse(content=result, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except HTTPException as e:
+        return JSONResponse(content=e.detail, status_code=e.status_code)
+    except Exception as e:
+        logger.error(f"Database seed failed: {e}")
+        return JSONResponse(
+            content=get_structured_error("SEEDING_ERROR", f"Database seed failed: {e}", "Check logs"),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @app.post("/agent/chat")
@@ -378,8 +424,23 @@ async def get_competitor_price_feed_status():
         return JSONResponse(content=get_structured_error("FEED_ERROR", f"Failed to retrieve feed status: {e}", "Check feed logs"), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _serialize_bq_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert BigQuery rows to JSON-serializable format, converting datetime objects to ISO strings."""
+    result = []
+    for row in rows:
+        serialized = {}
+        for k, v in row.items():
+            if isinstance(v, datetime.datetime):
+                serialized[k] = v.isoformat()
+            elif isinstance(v, datetime.date):
+                serialized[k] = v.isoformat()
+            else:
+                serialized[k] = v
+        result.append(serialized)
+    return result
+
 @app.get("/feeds/prices/latest")
-async def get_latest_competitor_prices():
+async def get_latest_competitor_prices(category: str = "Entertainment"):
     """
     Retrieves the latest snapshot of competitor prices from BigQuery.
     """
@@ -388,9 +449,9 @@ async def get_latest_competitor_prices():
         config_status = validate_environment()
         if config_status["status"] == "error":
             return JSONResponse(content=config_status, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-            
+
         feed = CompetitorPriceFeed() # This might also raise auth errors if SERPAPI_KEY is missing
-        
+
         # SQL to get the latest timestamp and then all rows for that timestamp
         sql = f"""
             SELECT *
@@ -398,21 +459,19 @@ async def get_latest_competitor_prices():
             WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `{feed.FULL_TABLE_ID}`)
             ORDER BY sku_id
         """
-        
+
+        # Apply category predicate
+        sql = inject_category_predicate(sql, category, "sku_name")
+
         latest_prices = await bq_client_instance.query(sql, {})
-        
+
         if not latest_prices:
             return JSONResponse(
-                content={
-                    "status": "degraded",
-                    "source": "cached-analytics",
-                    "message": "No latest live price data found.",
-                    "rows": [],
-                },
+                content=[],
                 status_code=status.HTTP_200_OK,
             )
-            
-        return JSONResponse(content=latest_prices, status_code=status.HTTP_200_OK)
+
+        return JSONResponse(content=_serialize_bq_rows(latest_prices), status_code=status.HTTP_200_OK)
     except RuntimeError as e: # Catch our specific auth error
         logger.error(f"Failed to retrieve latest prices due to auth error: {e}")
         return JSONResponse(content={"status": "degraded", "source": "cached-analytics", "rows": [], "error": GCP_AUTH_ERROR_RESPONSE}, status_code=status.HTTP_200_OK)
@@ -549,12 +608,15 @@ async def dashboard(
                 "msg": f"Price {abs(gap):.1f}% {direction} market"
             })
 
+        # Serialize datetime objects in rows and timestamp
+        serialized_timestamp = timestamp.isoformat() if isinstance(timestamp, datetime.datetime) else timestamp
+
         return {
             "tab": "overview",
             "source": "bigquery-live",
-            "timestamp": timestamp,
+            "timestamp": serialized_timestamp,
             "alerts": alerts,
-            "rows": rows,
+            "rows": _serialize_bq_rows(rows),
         }
     except RuntimeError as e: # Catch auth errors or missing env vars
         logger.error(f"Dashboard overview failed: {e}")

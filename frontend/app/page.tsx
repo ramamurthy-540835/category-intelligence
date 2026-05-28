@@ -1127,7 +1127,7 @@ export default function Home() {
 
       {/* Status / data-source strip */}
       <div className="flex-shrink-0 bg-bby-surface border-b border-[var(--bby-border-subtle)] px-6 py-1.5 text-[11px] text-slate-300 flex items-center justify-between">
-        <span>Data Source: <span className={source.includes("live") ? "text-emerald-300 font-semibold" : source.includes("Auth Missing") ? "text-red-400 font-semibold" : source.includes("Error") ? "text-red-400 font-semibold" : "text-amber-300 font-semibold"}>{isTabLoading ? "loading" : source}</span></span>
+        <span>Data Source: <span className={source.includes("live") || source.includes("bigquery") ? "text-emerald-300 font-semibold" : source.includes("Auth Missing") ? "text-red-400 font-semibold" : source.includes("Error") ? "text-red-400 font-semibold" : "text-amber-300 font-semibold"}>{isTabLoading ? "loading" : (source.includes("bigquery") || source.includes("live")) ? "🟢 Live Data Lake" : source}</span></span>
         <span className="flex items-center gap-3">
           <select
             value={activeCategory}
