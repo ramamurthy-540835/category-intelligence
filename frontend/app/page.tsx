@@ -237,9 +237,11 @@ export default function Home() {
 
     if (Array.isArray(data.rows) && data.rows.length > 0) {
       setAlerts(Array.isArray(data.alerts) ? data.alerts : []);
-      setRows(data.rows);
-      setSource(data.source || "unknown");
-      setTimestamp(data.timestamp || "");
+      // Handle both wrapped object and flat array responses
+      const rowsData = Array.isArray(data) ? data : (data.rows || []);
+      setRows(rowsData);
+      setSource(data.source || "bigquery-live");
+      setTimestamp(data.timestamp || (Array.isArray(data) && data[0]?.snapshot_time) || "");
       setFeedStatus(prev => ({ ...prev, error: undefined, error_type: undefined })); // Clear previous errors
       setCurrentRunId(data.run_id || null); // Store the run ID if available
     } else {
