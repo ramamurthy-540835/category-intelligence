@@ -8,7 +8,8 @@ function getBackendUrl() {
   return (
     process.env.NEXT_PUBLIC_BACKEND_URL ||
     process.env.BACKEND_URL ||
-    process.env.NEXT_PUBLIC_API_BASE_URL
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    'https://category-intelligence-backend-gygcwrc62a-uc.a.run.app'
   );
 }
 

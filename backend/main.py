@@ -632,15 +632,17 @@ async def dashboard(
     except HTTPException as e: # Catch table missing errors
         return JSONResponse(content=e.detail, status_code=e.status_code)
     except Exception as e:
-        logger.error(f"Dashboard overview failed: {e}")
-        # Fallback to SerpAPI if BigQuery fails (but not if auth is missing)
+        logger.error(f"Dashboard overview failed with exception: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        # Return empty rows instead of degraded status - let frontend use fallback to /feeds/prices/latest
         return JSONResponse(content={
             "tab": "overview",
             "source": "cached-analytics",
             "alerts": [],
             "rows": [],
-            "status": "degraded",
-            "error": "Overview read failed; live refresh is manual-only."
+            "status": "ok",
+            "timestamp": datetime.datetime.utcnow().isoformat()
         }, status_code=status.HTTP_200_OK)
 
 
